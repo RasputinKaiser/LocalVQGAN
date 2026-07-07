@@ -135,6 +135,8 @@ class Generator:
                     continue
                 raise
             want_image = i % s.display_freq == 0 or i == s.iterations
-            img = self._to_pil(self._synth(z)) if want_image else None
+            # reuse this iteration's decode for preview frames; a re-decode
+            # after opt.step would cost a full extra VQGAN forward
+            img = self._to_pil(out) if want_image else None
             yield FrameUpdate(i, s.iterations, img, float(loss.detach()))
             i += 1
