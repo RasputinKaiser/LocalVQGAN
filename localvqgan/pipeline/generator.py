@@ -1,3 +1,4 @@
+import os
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,6 +50,20 @@ class Generator:
         self.vqgan = load_vqgan(config_path, ckpt_path, self.device)
         if self.clip is None or self.clip.model_name != clip_model:
             self.clip = ClipGuide(clip_model, self.device)
+        if os.environ.get("LOCALVQGAN_COMPILE") == "1":
+            try:
+                self.vqgan.model.decoder = torch.compile(self.vqgan.model.decoder)
+            except Exception as e:
+                print(f"warning: torch.compile of VQGAN decoder failed, using eager: {e}")
+            try:
+                self.clip.model.visual = torch.compile(self.clip.model.visual)
+            except Exception as e:
+                print(f"warning: torch.compile of CLIP visual tower failed, using eager: {e}")
+        if os.environ.get("LOCALVQGAN_CHANNELS_LAST") == "1":
+            try:
+                self.vqgan.model = self.vqgan.model.to(memory_format=torch.channels_last)
+            except Exception as e:
+                print(f"warning: channels_last for VQGAN model failed, using default: {e}")
         self._loaded = None
 
     def _model_dtype(self, precision: str) -> torch.dtype:
