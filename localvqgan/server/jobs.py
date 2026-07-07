@@ -164,7 +164,8 @@ class JobManager:
                     msg["image_jpeg"] = self._preview_jpeg(img)
                 self._publish(msg)
 
-            render_animation(gen, settings, kfs, writer, self._cancel, cb)
+            render_animation(gen, settings, kfs, writer, self._cancel, cb,
+                             extra={"engine_used": engine_name})
             self._publish({"state": "done", "run_id": writer.run_id})
         except GenerationOOM as e:
             self._publish({"state": "error", "error": str(e)})

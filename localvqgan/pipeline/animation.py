@@ -31,7 +31,8 @@ def transform_image(img: Image.Image, zoom: float, pan_x: int, pan_y: int) -> Im
 
 def render_animation(g: Generator, base: GenerationSettings, keyframes: list[Keyframe],
                      writer: RunWriter, cancel: threading.Event | None,
-                     progress_cb: Callable[[int, int, Image.Image | None], None]) -> None:
+                     progress_cb: Callable[[int, int, Image.Image | None], None],
+                     extra: dict | None = None) -> None:
     total = sum(k.frames for k in keyframes)
     done = 0
     current: Image.Image | None = None
@@ -59,7 +60,7 @@ def render_animation(g: Generator, base: GenerationSettings, keyframes: list[Key
             progress_cb(done, total, last.image)
             current = transform_image(last.image, kf.zoom, kf.pan_x, kf.pan_y)
     writer.save_final(current)
-    writer.write_sidecar({"animation": [k.__dict__ for k in keyframes]})
+    writer.write_sidecar({"animation": [k.__dict__ for k in keyframes], **(extra or {})})
 
 
 def _stash(writer: RunWriter, img: Image.Image) -> str:

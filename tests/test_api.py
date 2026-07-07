@@ -50,6 +50,18 @@ def test_job_lifecycle(tmp_path):
     assert gallery[0]["run_id"] == run_id
 
 
+def test_animation_sidecar_records_engine(tmp_path):
+    client, _ = make_client(tmp_path)
+    r = client.post("/api/jobs", json={"type": "animation",
+        "settings": {"prompts": "x", "engine": "torch", "width": 32, "height": 32},
+        "keyframes": [{"prompts": "x", "frames": 2, "iterations_per_frame": 2}]})
+    assert r.status_code == 200
+    run_id = r.json()["run_id"]
+    _wait_idle(client)
+    s = client.get(f"/api/gallery/{run_id}/settings.json").json()
+    assert s["engine_used"] == "torch"
+
+
 def test_busy_returns_409(tmp_path):
     client, _ = make_client(tmp_path)
     client.post("/api/jobs", json={"type": "still", "settings": {"prompts": "x"}})
