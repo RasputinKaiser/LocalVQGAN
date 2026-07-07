@@ -32,14 +32,16 @@ from localvqgan.pipeline.settings import GenerationSettings
 
 logger = logging.getLogger(__name__)
 
-# Decode and cutout intermediates scale with canvas pixels; chunk above the
-# verified 256x256 MLX comfort zone to bound the CLIP branch working set.
-MLX_CHUNKED_CUTOUTS_PIXEL_THRESHOLD = 256 * 256
+# Decode and cutout intermediates scale with canvas pixels. Above the verified
+# 256x256 MLX comfort zone, fp32 512x512 decode+cutouts thrashes 4.5GB+ into
+# swap at 74-123s/it, while bf16 decode+chunked cutouts runs steady at ~3.5s/it
+# with no swap growth; bf16 decode PSNR vs fp32 measured 55.1dB (gate >50dB).
+MLX_LARGE_CANVAS_PIXEL_THRESHOLD = 256 * 256
 CUTOUT_CHUNK_SIZE = 8
 
 
-def _should_use_chunked_cutouts(width: int, height: int, cutn: int) -> bool:
-    return cutn > 0 and width * height > MLX_CHUNKED_CUTOUTS_PIXEL_THRESHOLD
+def _is_large_canvas(width: int, height: int, cutn: int) -> bool:
+    return cutn > 0 and width * height > MLX_LARGE_CANVAS_PIXEL_THRESHOLD
 
 
 def make_adam(learning_rate):
@@ -169,6 +171,15 @@ class MlxGenerator:
 
         return step
 
+    def _select_vqgan_dtype(self, large_canvas: bool, did_fp32_retry: bool) -> None:
+        assert self.vqgan is not None
+        if did_fp32_retry:
+            self.vqgan.set_dtype(mx.float32)
+        elif large_canvas:
+            self.vqgan.set_dtype(mx.bfloat16)
+        else:
+            self.vqgan.set_dtype(mx.float32)
+
     def _synth_pullback(
         self,
         z: mx.array,
@@ -251,6 +262,8 @@ class MlxGenerator:
             z_orig = mx.array(z)
             params = {"z": z}
             opt = make_adam(s.step_size)
+            large_canvas = _is_large_canvas(s.width, s.height, s.cutouts)
+            self._select_vqgan_dtype(large_canvas, did_fp32_retry)
 
             targets = [
                 (self.clip.embed_text(prompt.text), prompt.weight, prompt.stop)
@@ -263,10 +276,8 @@ class MlxGenerator:
                 arr = mx.array(np.asarray(img, dtype=np.float32)[None] / 255.0)
                 targets.append((self.clip.encode_cutouts(arr), 1.0, float("-inf")))
 
-            if _should_use_chunked_cutouts(s.width, s.height, s.cutouts):
-                step = self._compile_step(
-                    lambda z_: self._chunked_value_and_grad(z_, z_orig, s, targets)
-                )
+            if large_canvas:
+                step = lambda z_: self._chunked_value_and_grad(z_, z_orig, s, targets)
             else:
                 def loss_fn(z_: mx.array) -> mx.array:
                     out = self._synth(z_)
