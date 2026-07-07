@@ -6,6 +6,10 @@ def _resize_bilinear(img: mx.array, size: int) -> mx.array:
     del n, c
     ys = (mx.arange(size) + 0.5) * (h / size) - 0.5
     xs = (mx.arange(size) + 0.5) * (w / size) - 0.5
+    # clamp the sample coordinates themselves: unclamped boundary coords go
+    # negative when upsampling, yielding negative weights and out-of-range output
+    ys = mx.clip(ys, 0, h - 1)
+    xs = mx.clip(xs, 0, w - 1)
     y0 = mx.clip(mx.floor(ys), 0, h - 1).astype(mx.int32)
     x0 = mx.clip(mx.floor(xs), 0, w - 1).astype(mx.int32)
     y1 = mx.minimum(y0 + 1, h - 1)
@@ -29,10 +33,19 @@ def _sharpness_kernel(channels: int) -> mx.array:
 
 
 def _sharpness(batch: mx.array, factor: mx.array) -> mx.array:
+    # kornia sharpness blurs with a valid (unpadded) conv and leaves the outer
+    # 1px ring untouched; zero-padding would darken the border ring
     kernel = _sharpness_kernel(batch.shape[-1])
-    blurred = mx.conv2d(batch, kernel, padding=1)
-    out = batch + (batch - blurred) * (factor - 1.0)[:, None, None, None]
-    return mx.clip(out, 0, 1)
+    blurred = mx.conv2d(batch, kernel, padding=0)
+    interior = batch[:, 1:-1, 1:-1, :]
+    blended = mx.clip(
+        interior + (interior - blurred) * (factor - 1.0)[:, None, None, None], 0, 1)
+    out = mx.concatenate([
+        batch[:, :1, :, :],
+        mx.concatenate([batch[:, 1:-1, :1, :], blended, batch[:, 1:-1, -1:, :]], axis=2),
+        batch[:, -1:, :, :],
+    ], axis=1)
+    return out
 
 
 def make_cutouts(img: mx.array, cutn: int, cut_size: int, cut_pow: float = 1.0) -> mx.array:
