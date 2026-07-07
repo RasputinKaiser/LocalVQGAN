@@ -106,3 +106,22 @@ def test_ws_streams_frames_and_reattach(tmp_path):
     with client.websocket_connect("/ws") as ws2:
         snap = ws2.receive_json()
         assert snap["state"] == "done" and snap.get("image_b64")
+
+
+def _data_url():
+    import base64 as b64
+    from io import BytesIO
+    buf = BytesIO()
+    Image.new("RGB", (16, 16), (0, 255, 0)).save(buf, format="PNG")
+    return "data:image/png;base64," + b64.b64encode(buf.getvalue()).decode()
+
+
+def test_init_image_upload_decoded(tmp_path):
+    client, mgr = make_client(tmp_path)
+    r = client.post("/api/jobs", json={"type": "still",
+        "settings": {"prompts": "x", "iterations": 5},
+        "init_image_data": _data_url()})
+    assert r.status_code == 200
+    _wait_idle(client)
+    uploads = list((tmp_path / "_uploads").glob("*.png"))
+    assert len(uploads) == 1

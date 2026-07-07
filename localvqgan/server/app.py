@@ -38,16 +38,32 @@ def create_app(manager: JobManager) -> FastAPI:
 
     @app.post("/api/jobs")
     def start_job(body: dict):
+        settings = body.get("settings", {})
         try:
+            for key, target in (("init_image_data", "init_image"),
+                                ("image_prompt_data", "image_prompts")):
+                data_url = body.get(key)
+                if not data_url:
+                    continue
+                _, b64data = data_url.split(",", 1)
+                updir = manager.outputs_root / "_uploads"
+                updir.mkdir(parents=True, exist_ok=True)
+                n = len(list(updir.glob("*"))) + 1
+                p = updir / f"upload-{n:04d}.png"
+                p.write_bytes(base64.b64decode(b64data))
+                if target == "image_prompts":
+                    settings.setdefault("image_prompts", []).append(str(p))
+                else:
+                    settings[target] = str(p)
             if body.get("type") == "animation":
-                run_id = manager.start_animation(body.get("settings", {}),
+                run_id = manager.start_animation(settings,
                                                  body.get("keyframes", []))
             else:
-                run_id = manager.start_still(body.get("settings", {}))
+                run_id = manager.start_still(settings)
         except Busy:
             raise HTTPException(409, "A job is already running")
-        except TypeError as e:
-            raise HTTPException(422, f"Bad settings: {e}")
+        except (TypeError, ValueError) as e:
+            raise HTTPException(422, f"Bad request: {e}")
         return {"run_id": run_id}
 
     @app.post("/api/jobs/cancel")
@@ -139,3 +155,9 @@ def create_app(manager: JobManager) -> FastAPI:
 
     app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
     return app
+
+
+def _preview_app() -> FastAPI:
+    # uvicorn --factory entry for dev preview; mirrors main.run() wiring
+    from localvqgan.pipeline.generator import Generator
+    return create_app(JobManager(Generator, Path.cwd() / "outputs"))

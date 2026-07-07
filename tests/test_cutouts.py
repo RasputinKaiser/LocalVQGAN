@@ -20,3 +20,13 @@ def test_gradients_flow():
     x = torch.rand(1, 3, 64, 64, requires_grad=True)
     mc(x).sum().backward()
     assert x.grad is not None
+
+
+def test_mps_config_has_no_grid_sample_augs():
+    import kornia.augmentation as K
+    mc = MakeCutouts(cut_size=32, cutn=4, device_type="mps")
+    kinds = [type(m) for m in mc.augs]
+    assert K.RandomAffine not in kinds and K.RandomPerspective not in kinds
+    mc_cpu = MakeCutouts(cut_size=32, cutn=4, device_type="cpu")
+    kinds_cpu = [type(m) for m in mc_cpu.augs]
+    assert K.RandomAffine in kinds_cpu and K.RandomPerspective in kinds_cpu

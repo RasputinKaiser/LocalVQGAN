@@ -1,1 +1,66 @@
-<!doctype html><title>LocalVQGAN</title><p>UI coming in Task 12</p>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LocalVQGAN</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="panel">
+    <h1>LocalVQGAN</h1>
+    <label>Prompts <span class="hint">pipe-separated, weight with :1.5</span>
+      <textarea id="prompts" rows="3" placeholder="an enchanted forest | trending on artstation:0.5"></textarea>
+    </label>
+    <label>Checkpoint <select id="checkpoint"></select></label>
+    <div id="ckpt-download" class="hidden">
+      <button id="download-btn">Download checkpoint</button>
+      <progress id="download-progress" max="100" value="0" class="hidden"></progress>
+    </div>
+    <div id="ckpt-offline" class="warn hidden">All public mirrors for this checkpoint are offline. Manual install: drop config.yaml + model.ckpt into ~/.cache/localvqgan/&lt;name&gt;/</div>
+    <div class="row">
+      <label>Width <input id="width" type="number" value="384" step="16" min="64"></label>
+      <label>Height <input id="height" type="number" value="384" step="16" min="64"></label>
+    </div>
+    <div class="row">
+      <label>Iterations <input id="iterations" type="number" value="300" min="1"></label>
+      <label>Cutouts <input id="cutouts" type="number" value="32" min="8" max="64"></label>
+    </div>
+    <div class="row">
+      <label>Step size <input id="step_size" type="number" value="0.1" step="0.01"></label>
+      <label>Seed <input id="seed" type="number" value="-1"></label>
+    </div>
+    <label>CLIP <select id="clip_model">
+      <option>ViT-B-32</option><option>ViT-B-16</option>
+    </select></label>
+    <label>Init image <input id="init_image" type="file" accept="image/*"></label>
+    <label>Image prompt <input id="image_prompt" type="file" accept="image/*"></label>
+    <div id="size-warning" class="warn hidden"></div>
+    <button id="generate" class="primary">Generate</button>
+    <button id="stop" class="hidden">Stop</button>
+    <details id="anim">
+      <summary>Animation mode</summary>
+      <div id="keyframes"></div>
+      <button id="add-kf">+ keyframe</button>
+      <button id="animate" class="primary">Render animation</button>
+    </details>
+    <div id="sysinfo" class="hint"></div>
+  </aside>
+  <main class="stage">
+    <div class="preview-wrap">
+      <img id="preview" alt="">
+      <div id="idle-hint">Enter a prompt and hit Generate</div>
+    </div>
+    <div class="statusbar">
+      <span id="progress-text"></span>
+      <span id="speed"></span>
+      <canvas id="loss-spark" width="160" height="28"></canvas>
+      <span id="error" class="warn"></span>
+    </div>
+  </main>
+</div>
+<section id="gallery-section"><h2>Gallery</h2><div id="gallery"></div></section>
+<script src="app.js"></script>
+</body>
+</html>

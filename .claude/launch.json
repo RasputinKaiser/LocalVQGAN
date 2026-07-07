@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "localvqgan",
+      "runtimeExecutable": ".venv/bin/uvicorn",
+      "runtimeArgs": ["localvqgan.server.app:_preview_app", "--factory", "--host", "127.0.0.1", "--port", "8420"],
+      "port": 8420
+    }
+  ]
+}

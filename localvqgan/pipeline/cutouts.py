@@ -5,19 +5,27 @@ from torch.nn import functional as F
 
 
 class MakeCutouts(nn.Module):
-    def __init__(self, cut_size: int, cutn: int, cut_pow: float = 1.0):
+    def __init__(self, cut_size: int, cutn: int, cut_pow: float = 1.0,
+                 device_type: str = "cpu"):
         super().__init__()
         self.cut_size = cut_size
         self.cutn = cutn
         self.cut_pow = cut_pow
         self.noise_fac = 0.1
-        self.augs = nn.Sequential(
+        augs = [
             K.RandomHorizontalFlip(p=0.5),
             K.RandomSharpness(0.3, p=0.4),
-            K.RandomAffine(degrees=30, translate=0.1, p=0.8, padding_mode="border"),
-            K.RandomPerspective(0.2, p=0.4),
-            K.ColorJitter(hue=0.01, saturation=0.01, p=0.7),
-        )
+        ]
+        if device_type != "mps":
+            # grid_sampler_2d_backward has no MPS kernel; its CPU fallback
+            # saturates every core per iteration. Random cutout offsets already
+            # provide translation diversity, so MPS drops only rotation/warp.
+            augs += [
+                K.RandomAffine(degrees=30, translate=0.1, p=0.8, padding_mode="border"),
+                K.RandomPerspective(0.2, p=0.4),
+            ]
+        augs.append(K.ColorJitter(hue=0.01, saturation=0.01, p=0.7))
+        self.augs = nn.Sequential(*augs)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         side_y, side_x = input.shape[2:4]
