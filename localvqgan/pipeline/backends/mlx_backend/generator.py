@@ -189,7 +189,7 @@ class MlxGenerator:
             def loss_fn(z_: mx.array) -> mx.array:
                 out = self._synth(z_)
                 embeds = self.clip.encode_cutouts(
-                    make_cutouts(out, s.cutouts, self.clip.cut_size)
+                    make_cutouts(out, s.cutouts, self.clip.cut_size, s.cut_pow)
                 )
                 losses = [prompt_loss(embeds, t, w, stop) for t, w, stop in targets]
                 if s.init_weight:

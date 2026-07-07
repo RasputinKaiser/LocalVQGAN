@@ -121,11 +121,35 @@ def test_system_info(tmp_path):
     assert "device" in info and "max_recommended_side" in info
 
 
-def test_bad_settings_422(tmp_path):
+def test_unknown_settings_are_ignored(tmp_path):
     client, _ = make_client(tmp_path)
     r = client.post("/api/jobs", json={"type": "still",
                                        "settings": {"prompts": "x", "bogus_field": 1}})
-    assert r.status_code == 422
+    assert r.status_code == 200
+    _wait_idle(client)
+
+
+def test_cut_pow_round_trips_to_sidecar(tmp_path):
+    client, _ = make_client(tmp_path)
+    r = client.post("/api/jobs", json={"type": "still",
+        "settings": {"prompts": "x", "iterations": 5, "cut_pow": 1.7,
+                     "engine": "torch"}})
+    assert r.status_code == 200
+    run_id = r.json()["run_id"]
+    _wait_idle(client)
+    s = client.get(f"/api/gallery/{run_id}/settings.json").json()
+    assert s["cut_pow"] == 1.7
+
+
+def test_cut_pow_defaults_to_one_in_sidecar(tmp_path):
+    client, _ = make_client(tmp_path)
+    r = client.post("/api/jobs", json={"type": "still",
+        "settings": {"prompts": "x", "iterations": 5, "engine": "torch"}})
+    assert r.status_code == 200
+    run_id = r.json()["run_id"]
+    _wait_idle(client)
+    s = client.get(f"/api/gallery/{run_id}/settings.json").json()
+    assert s["cut_pow"] == 1.0
 
 
 def test_ws_snapshot_on_connect(tmp_path):

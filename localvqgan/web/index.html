@@ -10,7 +10,7 @@
 <div class="layout">
   <aside class="panel">
     <h1>LocalVQGAN</h1>
-    <label>Prompts <span class="hint">pipe-separated, weight with :1.5</span>
+    <label>Prompts <span class="hint">separate prompts with | and weight them like sunset:1.5 | fog:0.3</span>
       <textarea id="prompts" rows="3" placeholder="an enchanted forest | trending on artstation:0.5"></textarea>
     </label>
     <label>Checkpoint <select id="checkpoint"></select></label>
@@ -29,16 +29,59 @@
     </div>
     <div class="row">
       <label>Step size <input id="step_size" type="number" value="0.1" step="0.01"></label>
-      <label>Seed <input id="seed" type="number" value="-1"></label>
+      <label>Engine <select id="engine">
+        <option value="auto">auto</option>
+      </select></label>
     </div>
-    <label>CLIP <select id="clip_model">
-      <option>ViT-B-32</option><option>ViT-B-16</option>
-    </select></label>
-    <label>Engine <select id="engine">
-      <option value="auto">auto</option>
-    </select></label>
-    <label>Init image <input id="init_image" type="file" accept="image/*"></label>
-    <label>Image prompt <input id="image_prompt" type="file" accept="image/*"></label>
+    <details id="advanced">
+      <summary>Advanced</summary>
+      <div class="advanced-controls">
+        <div class="row">
+          <label>Cut power
+            <input id="cut_pow" type="number" value="1.0" step="0.1" min="0.1">
+            <span class="hint">how varied the crop sizes are — higher = more small crops, sharper details</span>
+          </label>
+          <label>Init weight
+            <input id="init_weight" type="number" value="0" step="0.05" min="0">
+            <span class="hint">how strongly to stay close to the init image (0 = ignore it)</span>
+          </label>
+        </div>
+        <div class="row">
+          <label>Display frequency
+            <input id="display_freq" type="number" value="5" min="1">
+            <span class="hint">how often the preview updates (lower = more updates, slightly slower)</span>
+          </label>
+          <label>Seed
+            <input id="seed" type="number" value="-1">
+            <span class="hint">reuse a number for repeatable starts (-1 = random)</span>
+          </label>
+        </div>
+        <div class="row">
+          <label>CLIP
+            <select id="clip_model">
+              <option>ViT-B-32</option><option>ViT-B-16</option>
+            </select>
+            <span class="hint">text-image model used to score each step</span>
+          </label>
+          <label>Precision
+            <select id="precision">
+              <option value="auto">auto</option>
+              <option value="fp16">fp16</option>
+              <option value="fp32">fp32</option>
+            </select>
+            <span class="hint">torch-only numeric mode (auto is usually best)</span>
+          </label>
+        </div>
+        <label>Init image
+          <input id="init_image" type="file" accept="image/*">
+          <span class="hint">optional starting image for image-to-image runs</span>
+        </label>
+        <label>Image prompt
+          <input id="image_prompt" type="file" accept="image/*">
+          <span class="hint">optional image target to guide the result</span>
+        </label>
+      </div>
+    </details>
     <div id="size-warning" class="warn hidden"></div>
     <button id="generate" class="primary">Generate</button>
     <button id="stop" class="hidden">Stop</button>

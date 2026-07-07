@@ -3,6 +3,7 @@ import io
 import math
 import threading
 import time
+from dataclasses import fields
 from pathlib import Path
 from typing import Callable
 
@@ -15,6 +16,14 @@ from localvqgan.pipeline.settings import GenerationSettings
 
 class Busy(Exception):
     pass
+
+
+_SETTINGS_FIELDS = {f.name for f in fields(GenerationSettings)}
+
+
+def generation_settings_from_dict(settings_dict: dict) -> GenerationSettings:
+    known = {k: v for k, v in settings_dict.items() if k in _SETTINGS_FIELDS}
+    return GenerationSettings(**known)
 
 
 class JobManager:
@@ -84,7 +93,7 @@ class JobManager:
 
     def start_still(self, settings_dict: dict) -> str:
         self._begin()
-        settings = GenerationSettings(**settings_dict)
+        settings = generation_settings_from_dict(settings_dict)
         writer = RunWriter(self.outputs_root, settings)
         self._thread = threading.Thread(
             target=self._run_still, args=(settings, writer), daemon=True)
@@ -93,7 +102,7 @@ class JobManager:
 
     def start_animation(self, settings_dict: dict, keyframes: list[dict]) -> str:
         self._begin()
-        settings = GenerationSettings(**settings_dict)
+        settings = generation_settings_from_dict(settings_dict)
         writer = RunWriter(self.outputs_root, settings)
         kfs = [Keyframe(**k) for k in keyframes]
         self._thread = threading.Thread(

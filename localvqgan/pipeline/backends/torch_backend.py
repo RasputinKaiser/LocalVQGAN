@@ -106,7 +106,7 @@ class Generator:
             z.requires_grad_(True)
             opt = optim.Adam([z], lr=s.step_size)
 
-            make_cutouts = MakeCutouts(self.clip.cut_size, s.cutouts,
+            make_cutouts = MakeCutouts(self.clip.cut_size, s.cutouts, s.cut_pow,
                                        device_type=self.device.type).to(self.device)
             prompt_modules = [
                 Prompt(self.clip.embed_text(p.text), p.weight, p.stop).to(self.device)
