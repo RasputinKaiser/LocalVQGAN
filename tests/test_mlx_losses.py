@@ -93,3 +93,20 @@ def test_cutouts_shape_and_grad():
         return make_cutouts(x, cutn=4, cut_size=64).sum()
     g = mx.grad(f)(img)
     assert g.shape == img.shape
+
+
+def test_clamp_with_grad_half_precision_grad():
+    # Regression: fp32-hardcoded bounds fed to the custom vjp under dtype
+    # promotion produced silent NaN gradients for fp16/bf16 inputs (fe3081f).
+    ref = np.array(mx.grad(
+        lambda t: clamp_with_grad(t, mx.array(0.0), mx.array(1.0)).sum()
+    )(mx.array([-1.0, 0.25, 0.75, 2.0])))
+    for dt in (mx.float16, mx.bfloat16):
+        x = mx.array([-1.0, 0.25, 0.75, 2.0]).astype(dt)
+        g = mx.grad(
+            lambda t: clamp_with_grad(t, mx.array(0.0), mx.array(1.0)).sum()
+        )(x)
+        assert g.dtype == dt
+        g_np = np.array(g.astype(mx.float32))
+        assert np.all(np.isfinite(g_np)), dt
+        assert np.allclose(g_np, ref), dt

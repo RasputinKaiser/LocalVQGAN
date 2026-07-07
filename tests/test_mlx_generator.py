@@ -64,3 +64,33 @@ def test_cancel_stops_early():
         if seen == 2:
             cancel.set()
     assert seen < 100
+
+
+@pytest.mark.slow
+def test_generate_works_across_threads():
+    # The server runs each job in a fresh thread and MLX streams are
+    # thread-local: any lazy param (e.g. set_dtype casts that mx.compile
+    # traps in its trace) raises "There is no Stream(gpu, N) in current
+    # thread" on the next job's thread unless materialized at load time.
+    import mlx.core as mx
+    from localvqgan.pipeline.backends.mlx_backend.generator import MlxGenerator
+
+    g = MlxGenerator()
+    g.load_from_paths(FIXTURE, None, "ViT-B-32")
+    g.clip.set_dtype(mx.float16)  # the precision split load() ships
+    s = GenerationSettings(prompts="a red square", width=64, height=64,
+                           iterations=2, cutouts=2, seed=1, display_freq=1)
+    errors = []
+
+    def run():
+        try:
+            frames = list(g.generate(s))
+            assert frames and frames[-1].image is not None
+        except Exception as exc:  # noqa: BLE001 - recorded for the main thread
+            errors.append(exc)
+
+    for _ in range(2):
+        t = threading.Thread(target=run)
+        t.start()
+        t.join()
+    assert not errors, errors

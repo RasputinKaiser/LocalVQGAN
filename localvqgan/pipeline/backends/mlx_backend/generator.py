@@ -219,7 +219,7 @@ class MlxGenerator:
                         self.clip.set_dtype(mx.float32)
                         break
                     raise RuntimeError(
-                        "generation produced non-finite loss; try precision=fp32"
+                        "generation produced non-finite loss; try the torch engine"
                     )
 
                 want_image = i % s.display_freq == 0 or i == s.iterations

@@ -298,6 +298,9 @@ class MlxVQGAN(nn.Module):
         if self._dtype == dtype:
             return
         self.apply(lambda p: p.astype(dtype))
+        # Materialize the casts so they aren't left bound to this thread's
+        # MLX stream (server jobs each run in a fresh thread).
+        mx.eval(self.parameters())
         self._dtype = dtype
 
 

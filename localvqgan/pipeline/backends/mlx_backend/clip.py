@@ -386,6 +386,10 @@ class MlxClip:
         config = _config_from_pretrained(model_dir)
         model = CLIPModel(config)
         model.load_weights(str(weights_path))
+        # Materialize now: lazy params are bound to this thread's MLX stream,
+        # and server jobs run in a fresh thread each time ("There is no
+        # Stream(gpu, N) in current thread" on the second job otherwise).
+        mx.eval(model.parameters())
         model.eval().freeze()
         tokenizer = CLIPTokenizer.from_pretrained(
             model_dir, context_length=config.text_config.max_position_embeddings
@@ -406,4 +410,8 @@ class MlxClip:
         if self._dtype == dtype:
             return
         self.model.update(tree_map(lambda p: p.astype(dtype), self.model.parameters()))
+        # Materialize the casts: mx.compile captures them into its trace, so
+        # nothing else ever evaluates these arrays, and lazy arrays cannot be
+        # evaluated from the different thread a later server job runs in.
+        mx.eval(self.model.parameters())
         self._dtype = dtype
