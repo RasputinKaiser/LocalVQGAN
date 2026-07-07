@@ -41,3 +41,17 @@ def test_encode_matches_torch():
     ref = tw.encode(img).detach().numpy()
     out = np.array(mw.encode(mx.array(img.numpy().transpose(0, 2, 3, 1))))
     assert _psnr(ref.transpose(0, 2, 3, 1), out) > 50
+
+
+def test_gumbel_checkpoint_rejected_clearly():
+    from localvqgan.pipeline.backends.mlx_backend import convert as c
+
+    class FakeGumbelWrapper:
+        class model:
+            @staticmethod
+            def state_dict():
+                return {"quantize.embed.weight": torch.zeros(4, 2),
+                        "quantize.proj.weight": torch.zeros(4, 8, 1, 1)}
+
+    with pytest.raises(NotImplementedError, match="Gumbel"):
+        c.torch_vqgan_to_mlx_weights(FIXTURE, None, torch_wrapper=FakeGumbelWrapper())

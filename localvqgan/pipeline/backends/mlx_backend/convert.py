@@ -48,6 +48,10 @@ def torch_vqgan_to_mlx_weights(config_path, ckpt_path, torch_wrapper=None) -> di
 
         torch_wrapper = load_vqgan(config_path, ckpt_path, torch.device("cpu"))
     state_dict = torch_wrapper.model.state_dict()
+    if any(k.startswith(("quantize.embed.", "quantize.proj.")) for k in state_dict):
+        raise NotImplementedError(
+            "Gumbel-quantizer checkpoints are not supported by the MLX engine; "
+            "use the torch engine for this checkpoint")
     weights = {}
     consumed = set()
     for name, tensor in state_dict.items():
