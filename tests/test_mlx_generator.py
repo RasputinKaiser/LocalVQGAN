@@ -1,6 +1,7 @@
 import threading
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 pytest.importorskip("mlx")
@@ -8,6 +9,16 @@ pytest.importorskip("mlx")
 from localvqgan.pipeline.settings import GenerationSettings
 
 FIXTURE = Path(__file__).parent / "fixtures" / "tiny_vqgan.yaml"
+
+
+def _run_tiny_generation(cutouts: int):
+    from localvqgan.pipeline.backends.mlx_backend.generator import MlxGenerator
+
+    g = MlxGenerator()
+    g.load_from_paths(FIXTURE, None, "ViT-B-32")
+    s = GenerationSettings(prompts="a red square", width=64, height=64,
+                           iterations=2, cutouts=cutouts, seed=42, display_freq=1)
+    return list(g.generate(s))
 
 
 def test_adam_matches_torch_bias_correction():
@@ -31,6 +42,42 @@ def test_adam_matches_torch_bias_correction():
     for g in grads:
         m = mopt.apply_gradients({"z": mx.array(g)}, m)
     assert np.allclose(np.array(m["z"]), t.detach().numpy(), atol=1e-5)
+
+
+def test_chunked_cutout_threshold_gate():
+    from localvqgan.pipeline.backends.mlx_backend.generator import (
+        _should_use_chunked_cutouts,
+    )
+
+    assert not _should_use_chunked_cutouts(256, 256, 32)
+    assert _should_use_chunked_cutouts(512, 512, 32)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("cutouts", [4, 5])
+def test_chunked_cutouts_match_seeded_unchunked_generation(monkeypatch, cutouts):
+    from localvqgan.pipeline.backends.mlx_backend import generator
+
+    monkeypatch.setenv("LOCALVQGAN_MLX_COMPILE", "0")
+    monkeypatch.setattr(generator, "MLX_CHUNKED_CUTOUTS_PIXEL_THRESHOLD", 10**12)
+    unchunked = _run_tiny_generation(cutouts)
+
+    monkeypatch.setattr(generator, "MLX_CHUNKED_CUTOUTS_PIXEL_THRESHOLD", 0)
+    monkeypatch.setattr(generator, "CUTOUT_CHUNK_SIZE", 2)
+    chunked = _run_tiny_generation(cutouts)
+
+    unchunked_losses = np.array([f.loss for f in unchunked], dtype=np.float32)
+    chunked_losses = np.array([f.loss for f in chunked], dtype=np.float32)
+    assert np.allclose(chunked_losses, unchunked_losses, atol=1e-5), (
+        chunked_losses,
+        unchunked_losses,
+    )
+
+    # The RNG recipe is identical, but chunking changes only float accumulation
+    # order; one uint8 level allows harmless final-image quantization drift.
+    chunked_img = np.asarray(chunked[-1].image, dtype=np.int16)
+    unchunked_img = np.asarray(unchunked[-1].image, dtype=np.int16)
+    assert np.max(np.abs(chunked_img - unchunked_img)) <= 1
 
 
 @pytest.mark.slow
