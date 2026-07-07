@@ -74,3 +74,48 @@ def cached_vqgan_weights(name: str) -> Path:
         mx.save_safetensors(str(tmp), {k: mx.array(v).astype(mx.float16) for k, v in weights.items()})
         tmp.replace(path)
     return path
+
+
+def cached_clip_weights(model_name: str) -> Path:
+    import shutil
+
+    import torch
+    from huggingface_hub import snapshot_download
+
+    repos = {
+        "ViT-B-32": "openai/clip-vit-base-patch32",
+        "ViT-B-16": "openai/clip-vit-base-patch16",
+    }
+    if model_name not in repos:
+        raise ValueError(f"Unknown CLIP model: {model_name}")
+
+    path = Path.home() / ".cache" / "localvqgan" / "clip" / model_name / "mlx" / "clip.safetensors"
+    if path.exists():
+        return path
+
+    snapshot_dir = Path(snapshot_download(
+        repo_id=repos[model_name],
+        allow_patterns=["*.bin", "*.json", "*.txt"],
+    ))
+    state_dict = torch.load(
+        snapshot_dir / "pytorch_model.bin",
+        map_location="cpu",
+        weights_only=True,
+    )
+    weights = {}
+    for key, tensor in state_dict.items():
+        if "position_ids" in key or key == "logit_scale":
+            continue
+        array = tensor.numpy()
+        if "patch_embedding.weight" in key:
+            array = array.transpose(0, 2, 3, 1)
+        weights[key] = array
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for name in ("config.json", "vocab.json", "merges.txt"):
+        shutil.copyfile(snapshot_dir / name, path.parent / name)
+
+    tmp = path.with_name(path.stem + ".tmp" + path.suffix)
+    mx.save_safetensors(str(tmp), {k: mx.array(v).astype(mx.float32) for k, v in weights.items()})
+    tmp.replace(path)
+    return path
