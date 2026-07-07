@@ -58,6 +58,18 @@ class VQGANWrapper:
         return self.model.decoder(self.model.post_quant_conv(z_q))
 
 
+def _lightning_stubs() -> list[type]:
+    stubs = []
+    for module, name in (
+        ("pytorch_lightning.callbacks.model_checkpoint", "ModelCheckpoint"),
+        ("pytorch_lightning.callbacks.early_stopping", "EarlyStopping"),
+    ):
+        cls = type(name, (), {})
+        cls.__module__ = module
+        stubs.append(cls)
+    return stubs
+
+
 def load_vqgan(config_path: Path, ckpt_path: Path | None, device: torch.device) -> VQGANWrapper:
     config = OmegaConf.load(config_path)
     is_gumbel = "Gumbel" in config.model.target
@@ -69,7 +81,10 @@ def load_vqgan(config_path: Path, ckpt_path: Path | None, device: torch.device) 
         kwargs["kl_weight"] = params.kl_weight
     model = cls(**kwargs)
     if ckpt_path is not None:
-        sd = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+        # Lightning ckpts pickle references to callback classes; allowlist
+        # inert stubs so the safe (weights_only) unpickler still applies.
+        with torch.serialization.safe_globals(_lightning_stubs()):
+            sd = torch.load(ckpt_path, map_location="cpu", weights_only=True)
         sd = sd.get("state_dict", sd)
         # checkpoints include loss-network weights we don't define; ignore them
         model.load_state_dict(sd, strict=False)
