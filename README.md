@@ -41,6 +41,8 @@ Two generation backends share the same checkpoints and math:
 Pick `torch`, `mlx`, or `auto` per generation in the GUI/API. `auto` uses
 mlx only when it's installed, supports the requested checkpoint, and meets
 the measured speed gate below; otherwise it falls back to torch.
+Auto engine selection uses mlx only up to 256x256 based on this measurement,
+and larger sizes automatically fall back to torch; explicit mlx selection has no size limit.
 
 Measured on an Apple M1 (imagenet_16384/ViT-B-32, 32 cutouts, steady state:
 5 warmup its + 20 timed its, `torch.set_num_threads(2)`, 2026-07-07):

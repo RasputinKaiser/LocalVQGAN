@@ -8,6 +8,11 @@ import platform
 #   size on 8-16GB unified memory; gate is defined at 256x256/32cut per spec.
 MLX_MEETS_SPEED_GATE = True
 
+# measured 2026-07-07 on M1 16GB: mlx 1.02 it/s at 256² (1.50x torch) but
+# thrashes unified memory at 384² (0.015 it/s). Only two data points exist,
+# so auto stays conservative: mlx only at or below 256².
+MLX_MAX_AUTO_PIXELS = 256 * 256
+
 
 def mlx_available() -> bool:
     return (platform.machine() == "arm64" and platform.system() == "Darwin"
@@ -26,7 +31,8 @@ def mlx_supports(checkpoint: str, clip_model: str) -> bool:
     return supports(checkpoint, clip_model)
 
 
-def resolve_engine(engine: str, checkpoint: str, clip_model: str) -> tuple[str, str]:
+def resolve_engine(engine: str, checkpoint: str, clip_model: str,
+                   width: int | None = None, height: int | None = None) -> tuple[str, str]:
     if engine == "torch":
         return "torch", "explicit"
     if engine == "mlx":
@@ -43,6 +49,8 @@ def resolve_engine(engine: str, checkpoint: str, clip_model: str) -> tuple[str, 
         return "torch", "mlx below speed gate on this build"
     if not mlx_supports(checkpoint, clip_model):
         return "torch", f"{checkpoint} unsupported on mlx"
+    if width and height and width * height > MLX_MAX_AUTO_PIXELS:
+        return "torch", f"{width}x{height} exceeds mlx auto limit on this machine"
     return "mlx", "auto"
 
 

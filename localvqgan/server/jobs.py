@@ -115,7 +115,8 @@ class JobManager:
                            "iteration": 0, "total": settings.iterations,
                            "phase": "loading"})
             engine_name, reason = resolve_engine(settings.engine, settings.checkpoint,
-                                                 settings.clip_model)
+                                                 settings.clip_model,
+                                                 width=settings.width, height=settings.height)
             gen = self._generator_for(engine_name)
             self._publish({"state": "running", "run_id": writer.run_id,
                            "engine": engine_name, "engine_reason": reason,
@@ -150,7 +151,8 @@ class JobManager:
                            "iteration": 0, "total": sum(k.frames for k in kfs),
                            "phase": "loading"})
             engine_name, reason = resolve_engine(settings.engine, settings.checkpoint,
-                                                 settings.clip_model)
+                                                 settings.clip_model,
+                                                 width=settings.width, height=settings.height)
             gen = self._generator_for(engine_name)
             self._publish({"state": "running", "run_id": writer.run_id,
                            "engine": engine_name, "engine_reason": reason,
