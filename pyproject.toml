@@ -1,0 +1,40 @@
+[project]
+name = "localvqgan"
+version = "0.1.0"
+description = "Fast local VQGAN+CLIP with a web GUI"
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.4",
+    "torchvision",
+    "open-clip-torch>=2.24",
+    "kornia>=0.7",
+    "einops",
+    "omegaconf",
+    "numpy",
+    "pillow",
+    "fastapi",
+    "uvicorn[standard]",
+    "imageio[ffmpeg]",
+    "requests",
+    "psutil",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-timeout", "httpx"]
+
+[project.scripts]
+localvqgan = "localvqgan.server.main:run"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["localvqgan*"]
+
+[tool.setuptools.package-data]
+"localvqgan.web" = ["**/*"]
+
+[tool.pytest.ini_options]
+addopts = "-m 'not slow'"
+markers = ["slow: downloads models or runs real generation"]
