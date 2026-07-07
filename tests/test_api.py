@@ -78,3 +78,31 @@ def test_bad_settings_422(tmp_path):
     r = client.post("/api/jobs", json={"type": "still",
                                        "settings": {"prompts": "x", "bogus_field": 1}})
     assert r.status_code == 422
+
+
+def test_ws_snapshot_on_connect(tmp_path):
+    client, _ = make_client(tmp_path)
+    with client.websocket_connect("/ws") as ws:
+        first = ws.receive_json()
+        assert first["state"] == "idle"
+
+
+def test_ws_streams_frames_and_reattach(tmp_path):
+    client, mgr = make_client(tmp_path)
+    with client.websocket_connect("/ws") as ws:
+        ws.receive_json()  # snapshot
+        client.post("/api/jobs", json={"type": "still",
+                                       "settings": {"prompts": "x", "iterations": 5,
+                                                    "display_freq": 1}})
+        got_image = False
+        for _ in range(20):
+            msg = ws.receive_json()
+            if msg.get("image_b64"):
+                got_image = True
+            if msg.get("state") == "done":
+                break
+        assert got_image
+    # reattach after job: snapshot carries last preview
+    with client.websocket_connect("/ws") as ws2:
+        snap = ws2.receive_json()
+        assert snap["state"] == "done" and snap.get("image_b64")

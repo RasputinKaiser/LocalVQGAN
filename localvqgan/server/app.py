@@ -119,6 +119,8 @@ def create_app(manager: JobManager) -> FastAPI:
     @app.websocket("/ws")
     async def ws(sock: WebSocket):
         await sock.accept()
+        # lifespan may not have run (e.g. bare TestClient); ensure publishes flow
+        manager.attach_loop(asyncio.get_running_loop())
         snapshot = manager.status()
         if manager.latest_preview:
             snapshot["image_b64"] = base64.b64encode(manager.latest_preview).decode()
