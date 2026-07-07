@@ -58,6 +58,30 @@ class Prompt(nn.Module):
         return self.weight.abs() * replace_grad(dists, torch.maximum(dists, self.stop)).mean()
 
 
+class FastPatchEmbed(nn.Module):
+    def __init__(self, conv: nn.Conv2d):
+        super().__init__()
+        assert conv.stride == conv.kernel_size
+        assert conv.padding == (0, 0)
+        assert conv.dilation == (1, 1)
+        assert conv.groups == 1
+        self.conv = conv
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        k = self.conv.kernel_size[0]
+        B, C, H, W = x.shape
+        x = x.to(dtype=self.conv.weight.dtype)
+        patches = (
+            x.reshape(B, C, H // k, k, W // k, k)
+            .permute(0, 2, 4, 1, 3, 5)
+            .reshape(B, (H // k) * (W // k), C * k * k)
+        )
+        out = patches @ self.conv.weight.reshape(self.conv.out_channels, -1).T
+        if self.conv.bias is not None:
+            out = out + self.conv.bias
+        return out.permute(0, 2, 1).reshape(B, self.conv.out_channels, H // k, W // k)
+
+
 _CLIP_NORM = transforms.Normalize(mean=(0.48145466, 0.4578275, 0.40821073),
                                   std=(0.26862954, 0.26130258, 0.27577711))
 
@@ -71,6 +95,9 @@ class ClipGuide:
         self.model, _, self.preprocess = open_clip.create_model_and_transforms(
             arch, pretrained="openai")
         self.model = self.model.eval().requires_grad_(False).to(device)
+        if device.type == "mps":
+            # Conv2d(kernel=stride=patch) backward on MPS is pathologically slow (~43 s/call, ~99% of iteration time); reshape+matmul is bit-exact and fast.
+            self.model.visual.conv1 = FastPatchEmbed(self.model.visual.conv1)
         self._dtype = torch.float32
         self.tokenizer = open_clip.get_tokenizer(model_name)
         size = self.model.visual.image_size

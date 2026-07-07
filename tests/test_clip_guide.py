@@ -1,7 +1,8 @@
 import pytest
 import torch
+from torch import nn
 
-from localvqgan.pipeline.clip_guide import Prompt, clamp_with_grad, vector_quantize
+from localvqgan.pipeline.clip_guide import FastPatchEmbed, Prompt, clamp_with_grad, vector_quantize
 
 
 def test_prompt_loss_scalar_and_grad():
@@ -33,6 +34,16 @@ def test_clamp_with_grad_range():
     x = torch.tensor([-1.0, 0.5, 2.0], requires_grad=True)
     y = clamp_with_grad(x, 0.0, 1.0)
     assert y.min() >= 0 and y.max() <= 1
+
+
+def test_fast_patch_embed_matches_conv():
+    conv = nn.Conv2d(3, 64, kernel_size=8, stride=8, bias=True)
+    x = torch.randn(2, 3, 32, 32, requires_grad=True)
+    fpe = FastPatchEmbed(conv)
+    out = fpe(x)
+    assert torch.allclose(out, conv(x), atol=1e-5)
+    out.sum().backward()
+    assert x.grad is not None
 
 
 @pytest.mark.slow
