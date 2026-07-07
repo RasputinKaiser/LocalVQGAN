@@ -28,6 +28,8 @@ class MakeCutouts(nn.Module):
         self.augs = nn.Sequential(*augs)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
+        # MPS falls back to a CPU antialias backward kernel that has no Half support.
+        input = input.float()
         side_y, side_x = input.shape[2:4]
         max_size = min(side_x, side_y)
         min_size = min(side_x, side_y, self.cut_size)

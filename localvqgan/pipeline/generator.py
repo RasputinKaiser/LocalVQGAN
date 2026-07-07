@@ -1,5 +1,4 @@
 import threading
-from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
@@ -24,7 +23,7 @@ class FrameUpdate:
     iteration: int
     total: int
     image: Image.Image | None
-    loss: float
+    loss: float | None
 
 
 class GenerationOOM(RuntimeError):
@@ -52,12 +51,17 @@ class Generator:
             self.clip = ClipGuide(clip_model, self.device)
         self._loaded = None
 
-    def _autocast(self, precision: str):
-        use_fp16 = precision == "fp16" or (
-            precision == "auto" and self.device.type in ("mps", "cuda"))
-        if use_fp16:
-            return torch.autocast(device_type=self.device.type, dtype=torch.float16)
-        return nullcontext()
+    def _model_dtype(self, precision: str) -> torch.dtype:
+        use_fp16 = (
+            self.device.type in ("mps", "cuda")
+            and precision in ("auto", "fp16")
+        )
+        return torch.float16 if use_fp16 else torch.float32
+
+    def _set_model_dtype(self, precision: str) -> None:
+        dtype = self._model_dtype(precision)
+        self.vqgan.set_dtype(dtype)
+        self.clip.set_dtype(dtype)
 
     def _synth(self, z: torch.Tensor) -> torch.Tensor:
         z_q = vector_quantize(z.movedim(1, 3), self.vqgan.codebook).movedim(3, 1)
@@ -86,57 +90,68 @@ class Generator:
                  cancel: threading.Event | None = None) -> Iterator[FrameUpdate]:
         assert self.vqgan is not None and self.clip is not None, "call load() first"
         seed = s.seed if s.seed >= 0 else int(torch.randint(0, 2**31 - 1, ()).item())
-        torch.manual_seed(seed)
-
-        codebook = self.vqgan.codebook
-        z_min = codebook.min(dim=0).values[None, :, None, None]
-        z_max = codebook.max(dim=0).values[None, :, None, None]
-
-        z = self._init_z(s).detach()
-        z_orig = z.clone()
-        z.requires_grad_(True)
-        opt = optim.Adam([z], lr=s.step_size)
-
-        make_cutouts = MakeCutouts(self.clip.cut_size, s.cutouts,
-                                   device_type=self.device.type).to(self.device)
-        prompt_modules = [
-            Prompt(self.clip.embed_text(p.text), p.weight, p.stop).to(self.device)
-            for p in parse_prompts(s.prompts)
-        ]
-        for path in s.image_prompts:
-            embed = self.clip.embed_image(Image.open(path).convert("RGB"))
-            prompt_modules.append(Prompt(embed, 1.0, float("-inf")).to(self.device))
 
         precision = s.precision
-        i = 1
-        while i <= s.iterations:
-            if cancel is not None and cancel.is_set():
-                return
+        did_fp32_retry = False
+        while True:
+            self._set_model_dtype(precision)
+            torch.manual_seed(seed)
+
+            codebook = self.vqgan.codebook
+            z_min = codebook.min(dim=0).values[None, :, None, None]
+            z_max = codebook.max(dim=0).values[None, :, None, None]
+
+            z = self._init_z(s).detach().float()
+            z_orig = z.clone()
+            z.requires_grad_(True)
+            opt = optim.Adam([z], lr=s.step_size)
+
+            make_cutouts = MakeCutouts(self.clip.cut_size, s.cutouts,
+                                       device_type=self.device.type).to(self.device)
+            prompt_modules = [
+                Prompt(self.clip.embed_text(p.text), p.weight, p.stop).to(self.device)
+                for p in parse_prompts(s.prompts)
+            ]
+            for path in s.image_prompts:
+                embed = self.clip.embed_image(Image.open(path).convert("RGB"))
+                prompt_modules.append(Prompt(embed, 1.0, float("-inf")).to(self.device))
+
+            i = 1
             try:
-                opt.zero_grad(set_to_none=True)
-                with self._autocast(precision):
+                while i <= s.iterations:
+                    if cancel is not None and cancel.is_set():
+                        return
+                    opt.zero_grad(set_to_none=True)
                     out = self._synth(z)
                     embeds = self.clip.encode_cutouts(make_cutouts(out))
-                losses = [pm(embeds) for pm in prompt_modules]
-                if s.init_weight:
-                    losses.append(F.mse_loss(z, z_orig) * s.init_weight / 2)
-                loss = sum(losses)
-                loss.backward()
-                opt.step()
-                with torch.inference_mode():
-                    z.copy_(z.maximum(z_min).minimum(z_max))
+                    losses = [pm(embeds) for pm in prompt_modules]
+                    if s.init_weight:
+                        losses.append(F.mse_loss(z, z_orig) * s.init_weight / 2)
+                    loss = sum(losses)
+                    if (i == 1 and precision != "fp32" and not did_fp32_retry
+                            and not bool(torch.isfinite(loss.detach()).item())):
+                        precision = "fp32"
+                        did_fp32_retry = True
+                        break
+                    loss.backward()
+                    opt.step()
+                    with torch.inference_mode():
+                        z.copy_(z.maximum(z_min).minimum(z_max))
+                    want_image = i % s.display_freq == 0 or i == s.iterations
+                    # reuse this iteration's decode for preview frames; a re-decode
+                    # after opt.step would cost a full extra VQGAN forward
+                    img = self._to_pil(out) if want_image else None
+                    loss_value = float(loss.detach()) if want_image else None
+                    yield FrameUpdate(i, s.iterations, img, loss_value)
+                    i += 1
             except RuntimeError as e:
                 msg = str(e).lower()
                 if "out of memory" in msg:
                     raise GenerationOOM(
                         "Out of memory — try a smaller size or fewer cutouts.") from e
-                if precision != "fp32" and i == 1:
+                if precision != "fp32" and i == 1 and not did_fp32_retry:
                     precision = "fp32"  # fp16 unsupported for some op; retry in fp32
                     continue
                 raise
-            want_image = i % s.display_freq == 0 or i == s.iterations
-            # reuse this iteration's decode for preview frames; a re-decode
-            # after opt.step would cost a full extra VQGAN forward
-            img = self._to_pil(out) if want_image else None
-            yield FrameUpdate(i, s.iterations, img, float(loss.detach()))
-            i += 1
+            if i > s.iterations:
+                return

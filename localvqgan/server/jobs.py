@@ -110,8 +110,10 @@ class JobManager:
             for u in self.generator.generate(settings, cancel=self._cancel):
                 msg = {"state": "running", "run_id": writer.run_id,
                        "phase": "generating", "iteration": u.iteration,
-                       "total": u.total, "loss": u.loss,
+                       "total": u.total,
                        "its_per_sec": round(u.iteration / max(time.time() - t0, 1e-6), 2)}
+                if u.loss is not None:
+                    msg["loss"] = u.loss
                 if u.image is not None:
                     writer.save_frame(u.iteration, u.image)
                     last_img = u.image

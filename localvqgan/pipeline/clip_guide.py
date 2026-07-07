@@ -71,17 +71,25 @@ class ClipGuide:
         self.model, _, self.preprocess = open_clip.create_model_and_transforms(
             arch, pretrained="openai")
         self.model = self.model.eval().requires_grad_(False).to(device)
+        self._dtype = torch.float32
         self.tokenizer = open_clip.get_tokenizer(model_name)
         size = self.model.visual.image_size
         self.cut_size = size[0] if isinstance(size, (tuple, list)) else size
+
+    def set_dtype(self, dtype: torch.dtype) -> None:
+        if self._dtype == dtype:
+            return
+        self.model.to(dtype=dtype)
+        self._dtype = dtype
 
     def embed_text(self, s: str) -> torch.Tensor:
         toks = self.tokenizer([s]).to(self.device)
         return self.model.encode_text(toks).float()
 
     def embed_image(self, pil_img) -> torch.Tensor:
-        t = self.preprocess(pil_img).unsqueeze(0).to(self.device)
+        t = self.preprocess(pil_img).unsqueeze(0).to(self.device, dtype=self._dtype)
         return self.model.encode_image(t).float()
 
     def encode_cutouts(self, batch: torch.Tensor) -> torch.Tensor:
-        return self.model.encode_image(_CLIP_NORM(batch)).float()
+        batch = _CLIP_NORM(batch).to(dtype=self._dtype)
+        return self.model.encode_image(batch).float()

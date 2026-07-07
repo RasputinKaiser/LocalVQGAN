@@ -36,11 +36,19 @@ class VQGANWrapper:
         self.is_gumbel = is_gumbel
         self.f = f
         self.device = device
+        self._dtype = torch.float32
+
+    def set_dtype(self, dtype: torch.dtype) -> None:
+        if self._dtype == dtype:
+            return
+        self.model.to(dtype=dtype)
+        self._dtype = dtype
 
     @property
     def codebook(self) -> torch.Tensor:
         q = self.model.quantize
-        return q.embed.weight if self.is_gumbel else q.embedding.weight
+        weight = q.embed.weight if self.is_gumbel else q.embedding.weight
+        return weight.float()
 
     @property
     def n_toks(self) -> int:
@@ -51,10 +59,11 @@ class VQGANWrapper:
         return self.codebook.shape[1]
 
     def encode(self, img: torch.Tensor) -> torch.Tensor:
-        h = self.model.encoder(img.to(self.device))
-        return self.model.quant_conv(h)
+        h = self.model.encoder(img.to(self.device, dtype=self._dtype))
+        return self.model.quant_conv(h).float()
 
     def decode(self, z_q: torch.Tensor) -> torch.Tensor:
+        z_q = z_q.to(self.device, dtype=self._dtype)
         return self.model.decoder(self.model.post_quant_conv(z_q))
 
 
