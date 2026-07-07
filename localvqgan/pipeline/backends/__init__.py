@@ -1,7 +1,11 @@
 import importlib.util
 import platform
 
-# flipped to the measured verdict in Task 8 per the spec's acceptance gate
+# Task 8 acceptance gate (imagenet_16384/ViT-B-32, 32 cutouts, M1, 2026-07-07,
+# steady state: warmup 5 its then timed 20 its, torch.set_num_threads(2)):
+#   256x256: torch=0.680 it/s, mlx=1.021 it/s -> ratio 1.50 (>= 1.2 gate met)
+#   384x384: torch=0.283 it/s, mlx=0.015 it/s -> mlx thrashes memory at this
+#   size on 8-16GB unified memory; gate is defined at 256x256/32cut per spec.
 MLX_MEETS_SPEED_GATE = True
 
 
