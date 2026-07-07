@@ -103,7 +103,8 @@ class MlxGenerator:
 
     @staticmethod
     def _to_pil(out: mx.array) -> Image.Image:
-        arr = np.array(mx.clip(out[0], 0, 1) * 255).astype(np.uint8)
+        # float32 first: numpy cannot read fp16/bf16 MLX buffers (PEP 3118)
+        arr = np.array((mx.clip(out[0], 0, 1) * 255).astype(mx.float32)).astype(np.uint8)
         return Image.fromarray(arr)
 
     @staticmethod
