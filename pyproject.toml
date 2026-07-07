@@ -38,3 +38,7 @@ include = ["localvqgan*"]
 [tool.pytest.ini_options]
 addopts = "-m 'not slow'"
 markers = ["slow: downloads models or runs real generation"]
+filterwarnings = [
+    # kornia calls torch.jit.script, deprecated on Python 3.14; it falls back cleanly
+    "ignore:.*torch\\.jit\\.script.*:DeprecationWarning",
+]
