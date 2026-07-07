@@ -236,9 +236,10 @@ class CLIPModel(nn.Module):
 
 
 class CLIPTokenizer:
-    def __init__(self, bpe_ranks, vocab):
+    def __init__(self, bpe_ranks, vocab, context_length: int | None = None):
         self.bpe_ranks = bpe_ranks
         self.vocab = vocab
+        self.context_length = context_length
         self.pat = regex.compile(
             r"""<\|startoftext\|>|<\|endoftext\|>|'s|'t|'re|'ve|'m|'ll|'d|[\p{L}]+|[\p{N}]|[^\s\p{L}\p{N}]+""",
             regex.IGNORECASE,
@@ -315,10 +316,13 @@ class CLIPTokenizer:
         ids.extend(self.vocab[token] for token in bpe_tokens)
         if append_eos:
             ids.append(self.eos_token)
+        if self.context_length is not None and len(ids) > self.context_length:
+            ids = ids[: self.context_length]
+            ids[-1] = self.eos_token
         return mx.array(ids)
 
     @staticmethod
-    def from_pretrained(path: str | Path):
+    def from_pretrained(path: str | Path, context_length: int | None = None):
         path = Path(path)
         with open(path / "vocab.json", encoding="utf-8") as f:
             vocab = json.load(f)
@@ -326,7 +330,7 @@ class CLIPTokenizer:
             bpe_merges = f.read().strip().split("\n")[1 : 49152 - 256 - 2 + 1]
         bpe_merges = [tuple(merge.split()) for merge in bpe_merges]
         bpe_ranks = dict(map(reversed, enumerate(bpe_merges)))
-        return CLIPTokenizer(bpe_ranks, vocab)
+        return CLIPTokenizer(bpe_ranks, vocab, context_length=context_length)
 
 
 def _config_from_pretrained(path: Path) -> CLIPConfig:
@@ -383,7 +387,9 @@ class MlxClip:
         model = CLIPModel(config)
         model.load_weights(str(weights_path))
         model.eval().freeze()
-        tokenizer = CLIPTokenizer.from_pretrained(model_dir)
+        tokenizer = CLIPTokenizer.from_pretrained(
+            model_dir, context_length=config.text_config.max_position_embeddings
+        )
         return cls(model_name, model, tokenizer, config.vision_config.image_size)
 
     def embed_text(self, s: str) -> mx.array:
