@@ -59,6 +59,11 @@ Identical math to the torch engine, reimplemented in MLX:
 - Non-finite loss on iteration 1 in fp16 → fp32 retry once (mirror of torch path).
 - OOM → same GenerationOOM surfacing.
 - Cancel honored between iterations, same as torch.
+- `mx.compile` failure at first step → run eager with a logged warning (never fatal).
+
+## Acceptance gate for defaulting
+
+"auto" prefers MLX only if the final benchmark shows ≥1.2× over torch-MPS at 256²/32cut. Below that, MLX ships as opt-in ("mlx" explicit) and "auto" keeps torch, until a later MLX release earns the default.
 
 ## Verification
 
