@@ -5,10 +5,39 @@ locally with a web GUI. Apple Silicon (MPS), NVIDIA (CUDA), and CPU.
 
 ## Quick start
 
+LocalVQGAN needs Python >=3.11. Install Python first and make sure `python3`
+(macOS/Linux) or `py` (Windows) works from your terminal.
+
+macOS/Linux, from a local clone:
+
     ./run.sh
 
-Opens http://127.0.0.1:8420. First use downloads the checkpoint you pick
-(ImageNet-16384 is the default, ~934 MB, one time) plus CLIP ViT-B/32.
+Windows, from a local clone:
+
+    run.bat
+
+Either command creates a project-local `.venv`, installs LocalVQGAN, starts the
+web app at http://127.0.0.1:8420, and opens a browser tab.
+
+Alternative one-command installs from a local clone, if you already use these
+tools:
+
+    pipx install .
+    uv tool install .
+    uvx --from . localvqgan
+
+Those install a `localvqgan` command on your PATH instead of using this
+project's `.venv`.
+
+First use downloads the checkpoint you pick, with `imagenet_16384` as the
+default (~934 MB), plus the CLIP model. Downloads are cached one time under
+`~/.cache/localvqgan/`; on Windows the code uses the same
+`Path.home() / ".cache" / "localvqgan"` location. Output images are written under
+`./outputs/<run-id>/`, relative to the folder where you launched the app, with
+a `settings.json` sidecar for each run.
+
+On Linux, the normal PyPI PyTorch install can pull CUDA runtime packages for
+supported NVIDIA setups; if CUDA is not available, PyTorch falls back to CPU.
 
 ## What's different from the Colab
 

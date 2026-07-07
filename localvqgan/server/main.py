@@ -12,5 +12,6 @@ from localvqgan.server.jobs import JobManager
 def run() -> None:
     manager = JobManager(Generator, Path.cwd() / "outputs")
     app = create_app(manager)
+    print("LocalVQGAN running at http://127.0.0.1:8420", flush=True)
     threading.Timer(1.5, lambda: webbrowser.open("http://127.0.0.1:8420")).start()
     uvicorn.run(app, host="127.0.0.1", port=8420)
