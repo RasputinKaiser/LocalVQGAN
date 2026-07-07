@@ -41,6 +41,8 @@ Two generation backends share the same checkpoints and math:
 Pick `torch`, `mlx`, or `auto` per generation in the GUI/API. `auto` uses
 mlx only when it's installed, supports the requested checkpoint, and meets
 the measured speed gate below; otherwise it falls back to torch.
+The `precision` setting applies to the torch engine only — mlx always runs
+VQGAN in fp32 and CLIP in fp16 (fp16 VQGAN overflows; see `PERFORMANCE.md`).
 Auto engine selection uses mlx only up to 256x256 based on this measurement,
 and larger sizes automatically fall back to torch; explicit mlx selection has no size limit.
 
