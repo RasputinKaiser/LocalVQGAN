@@ -29,7 +29,11 @@ class MakeCutouts(nn.Module):
             ox = int(torch.randint(0, side_x - size + 1, ()))
             oy = int(torch.randint(0, side_y - size + 1, ()))
             cut = input[:, :, oy:oy + size, ox:ox + size]
-            cutouts.append(F.adaptive_avg_pool2d(cut, self.cut_size))
+            # MPS lacks non-divisible adaptive_avg_pool2d; antialiased
+            # bilinear resize is equivalent for this use and runs everywhere
+            cutouts.append(F.interpolate(cut, size=(self.cut_size, self.cut_size),
+                                         mode="bilinear", align_corners=False,
+                                         antialias=True))
         batch = self.augs(torch.cat(cutouts))
         if self.noise_fac:
             facs = batch.new_empty([batch.shape[0], 1, 1, 1]).uniform_(0, self.noise_fac)

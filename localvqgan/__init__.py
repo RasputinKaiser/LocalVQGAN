@@ -1,0 +1,5 @@
+import os
+
+# grid_sampler_2d_backward (kornia affine/perspective augs) has no MPS kernel;
+# let just that op fall back to CPU. Must be set before torch initializes.
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")

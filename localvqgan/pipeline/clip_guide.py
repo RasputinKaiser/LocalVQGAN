@@ -66,8 +66,10 @@ class ClipGuide:
     def __init__(self, model_name: str, device: torch.device):
         self.model_name = model_name
         self.device = device
+        # OpenAI weights use QuickGELU; the plain names are GELU variants
+        arch = model_name if model_name.endswith("-quickgelu") else f"{model_name}-quickgelu"
         self.model, _, self.preprocess = open_clip.create_model_and_transforms(
-            model_name, pretrained="openai")
+            arch, pretrained="openai")
         self.model = self.model.eval().requires_grad_(False).to(device)
         self.tokenizer = open_clip.get_tokenizer(model_name)
         size = self.model.visual.image_size
