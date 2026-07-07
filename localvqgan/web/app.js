@@ -43,6 +43,12 @@ function updateDownloadUI() {
 
 async function loadSystem() {
   sysinfo = await api("/api/system");
+  const eng = $("engine");
+  for (const e of sysinfo.engines) {
+    const o = document.createElement("option");
+    o.value = e; o.textContent = e;
+    eng.appendChild(o);
+  }
   $("sysinfo").textContent =
     `device: ${sysinfo.device} · ram: ${sysinfo.total_ram_gb} GB · max side: ${sysinfo.max_recommended_side}px`;
   checkSize();
@@ -84,6 +90,7 @@ function settingsFromForm() {
     iterations: +$("iterations").value, cutouts: +$("cutouts").value,
     step_size: +$("step_size").value, seed: +$("seed").value,
     checkpoint: $("checkpoint").value, clip_model: $("clip_model").value,
+    engine: $("engine").value,
     display_freq: 5,
   };
 }
@@ -156,8 +163,10 @@ function onMessage(msg) {
   }
   if (msg.loss !== undefined) { losses.push(msg.loss); drawSpark(); }
   if (msg.iteration !== undefined)
-    $("progress-text").textContent = `${msg.phase || ""} ${msg.iteration}/${msg.total}`;
+    $("progress-text").textContent = `${msg.phase || ""} ${msg.iteration}/${msg.total}` + (msg.engine ? ` · ${msg.engine}` : "");
   if (msg.its_per_sec !== undefined) $("speed").textContent = `${msg.its_per_sec} it/s`;
+  if (msg.engine) $("speed").title = `engine: ${msg.engine} (${msg.engine_reason || ""})`;
+  if (msg.engine) $("progress-text").dataset.engine = msg.engine;
   if (msg.error) $("error").textContent = msg.error;
   if (msg.state === "running") setRunning(true);
   if (msg.state === "done" || msg.state === "error" || msg.state === "idle") {
@@ -191,7 +200,7 @@ async function loadGallery() {
     card.querySelector(".reuse").onclick = async (ev) => {
       const s = await api(`/api/gallery/${ev.target.dataset.run}/settings.json`);
       for (const k of ["prompts", "width", "height", "iterations", "cutouts",
-                       "step_size", "seed", "clip_model"])
+                       "step_size", "seed", "clip_model", "engine"])
         if (s[k] !== undefined && $(k)) $(k).value = s[k];
       if (s.checkpoint) $("checkpoint").value = s.checkpoint;
       checkSize();

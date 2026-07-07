@@ -140,3 +140,19 @@ def test_init_image_upload_decoded(tmp_path):
     _wait_idle(client)
     uploads = list((tmp_path / "_uploads").glob("*.png"))
     assert len(uploads) == 1
+
+
+def test_system_reports_engines(tmp_path):
+    client, _ = make_client(tmp_path)
+    info = client.get("/api/system").json()
+    assert "engines" in info and "torch" in info["engines"]
+
+
+def test_engine_recorded_in_sidecar(tmp_path):
+    client, _ = make_client(tmp_path)
+    r = client.post("/api/jobs", json={"type": "still",
+        "settings": {"prompts": "x", "iterations": 5, "engine": "torch"}})
+    run_id = r.json()["run_id"]
+    _wait_idle(client)
+    s = client.get(f"/api/gallery/{run_id}/settings.json").json()
+    assert s["engine_used"] == "torch"
