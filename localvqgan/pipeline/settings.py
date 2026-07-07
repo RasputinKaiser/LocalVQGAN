@@ -8,6 +8,7 @@ class GenerationSettings:
     height: int = 384
     iterations: int = 300
     cutouts: int = 32
+    cut_pow: float = 1.0
     step_size: float = 0.1
     seed: int = -1
     init_image: str | None = None

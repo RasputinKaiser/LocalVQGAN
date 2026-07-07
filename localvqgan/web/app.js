@@ -88,10 +88,13 @@ function settingsFromForm() {
     prompts: $("prompts").value,
     width: +$("width").value, height: +$("height").value,
     iterations: +$("iterations").value, cutouts: +$("cutouts").value,
+    cut_pow: +$("cut_pow").value,
     step_size: +$("step_size").value, seed: +$("seed").value,
+    init_weight: +$("init_weight").value,
     checkpoint: $("checkpoint").value, clip_model: $("clip_model").value,
     engine: $("engine").value,
-    display_freq: 5,
+    display_freq: +$("display_freq").value,
+    precision: $("precision").value,
   };
 }
 
@@ -200,7 +203,8 @@ async function loadGallery() {
     card.querySelector(".reuse").onclick = async (ev) => {
       const s = await api(`/api/gallery/${ev.target.dataset.run}/settings.json`);
       for (const k of ["prompts", "width", "height", "iterations", "cutouts",
-                       "step_size", "seed", "clip_model", "engine"])
+                       "cut_pow", "step_size", "seed", "init_weight", "clip_model",
+                       "engine", "display_freq", "precision"])
         if (s[k] !== undefined && $(k)) $(k).value = s[k];
       if (s.checkpoint) $("checkpoint").value = s.checkpoint;
       checkSize();
