@@ -29,6 +29,15 @@ from localvqgan.pipeline.settings import GenerationSettings
 logger = logging.getLogger(__name__)
 
 
+def make_adam(learning_rate):
+    return optim.Adam(
+        learning_rate=learning_rate,
+        betas=(0.9, 0.999),
+        eps=1e-8,
+        bias_correction=True,
+    )
+
+
 class MlxGenerator:
     def __init__(self):
         self.vqgan: MlxVQGAN | None = None
@@ -157,7 +166,7 @@ class MlxGenerator:
             z = mx.array(self._init_z(s), dtype=mx.float32)
             z_orig = mx.array(z)
             params = {"z": z}
-            opt = optim.Adam(learning_rate=s.step_size)
+            opt = make_adam(s.step_size)
 
             targets = [
                 (self.clip.embed_text(prompt.text), prompt.weight, prompt.stop)
@@ -187,7 +196,8 @@ class MlxGenerator:
                 if cancel is not None and cancel.is_set():
                     return
                 try:
-                    loss, grad = step(params["z"])
+                    preview_z = params["z"]
+                    loss, grad = step(preview_z)
                     params = opt.apply_gradients({"z": grad}, params)
                     params["z"] = mx.clip(params["z"], z_min, z_max)
                     mx.eval(loss, params["z"])
@@ -202,7 +212,8 @@ class MlxGenerator:
                     break
 
                 want_image = i % s.display_freq == 0 or i == s.iterations
-                img = self._to_pil(self._synth(params["z"])) if want_image else None
+                # Torch previews decode the same pre-update z that produced the reported loss.
+                img = self._to_pil(self._synth(preview_z)) if want_image else None
                 loss_value = float(np.array(loss).item()) if want_image else None
                 yield FrameUpdate(i, s.iterations, img, loss_value)
                 i += 1
