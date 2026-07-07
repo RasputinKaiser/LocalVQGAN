@@ -26,10 +26,14 @@ class MakeCutouts(nn.Module):
             ]
         augs.append(K.ColorJitter(hue=0.01, saturation=0.01, p=0.7))
         self.augs = nn.Sequential(*augs)
+        # antialias backward falls back to a CPU kernel on MPS (slow, fp32-only);
+        # plain bilinear is MPS-native and lets the whole cutout stage run fp16
+        self.antialias = device_type != "mps"
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        # MPS falls back to a CPU antialias backward kernel that has no Half support.
-        input = input.float()
+        if self.antialias:
+            # the CPU-fallback antialias backward kernel has no Half support
+            input = input.float()
         side_y, side_x = input.shape[2:4]
         max_size = min(side_x, side_y)
         min_size = min(side_x, side_y, self.cut_size)
@@ -39,11 +43,11 @@ class MakeCutouts(nn.Module):
             ox = int(torch.randint(0, side_x - size + 1, ()))
             oy = int(torch.randint(0, side_y - size + 1, ()))
             cut = input[:, :, oy:oy + size, ox:ox + size]
-            # MPS lacks non-divisible adaptive_avg_pool2d; antialiased
-            # bilinear resize is equivalent for this use and runs everywhere
+            # MPS lacks non-divisible adaptive_avg_pool2d; bilinear resize is
+            # equivalent for this use and runs everywhere
             cutouts.append(F.interpolate(cut, size=(self.cut_size, self.cut_size),
                                          mode="bilinear", align_corners=False,
-                                         antialias=True))
+                                         antialias=self.antialias))
         batch = self.augs(torch.cat(cutouts))
         if self.noise_fac:
             facs = batch.new_empty([batch.shape[0], 1, 1, 1]).uniform_(0, self.noise_fac)
