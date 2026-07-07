@@ -24,6 +24,9 @@ class FakeGenerator:
 
 def make_client(tmp_path):
     mgr = JobManager(lambda: FakeGenerator(), tmp_path)
+    # keep the mlx path faked too: with the real mlx generator installed,
+    # engine=auto would otherwise construct it and load real checkpoints
+    mgr._mlx_generator = FakeGenerator()
     return TestClient(create_app(mgr)), mgr
 
 

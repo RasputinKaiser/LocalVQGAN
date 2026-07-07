@@ -4,21 +4,25 @@ import mlx.core as mx
 def _resize_bilinear(img: mx.array, size: int) -> mx.array:
     n, h, w, c = img.shape
     del n, c
-    ys = (mx.arange(size) + 0.5) * (h / size) - 0.5
-    xs = (mx.arange(size) + 0.5) * (w / size) - 0.5
-    # clamp the sample coordinates themselves: unclamped boundary coords go
-    # negative when upsampling, yielding negative weights and out-of-range output
-    ys = mx.clip(ys, 0, h - 1)
-    xs = mx.clip(xs, 0, w - 1)
-    y0 = mx.clip(mx.floor(ys), 0, h - 1).astype(mx.int32)
-    x0 = mx.clip(mx.floor(xs), 0, w - 1).astype(mx.int32)
-    y1 = mx.minimum(y0 + 1, h - 1)
-    x1 = mx.minimum(x0 + 1, w - 1)
-    wy = (ys - y0.astype(ys.dtype))[None, :, None, None]
-    wx = (xs - x0.astype(xs.dtype))[None, None, :, None]
-    top = img[:, y0][:, :, x0] * (1 - wx) + img[:, y0][:, :, x1] * wx
-    bot = img[:, y1][:, :, x0] * (1 - wx) + img[:, y1][:, :, x1] * wx
-    return top * (1 - wy) + bot * wy
+
+    def weights(src: int, dst: int) -> mx.array:
+        s = (mx.arange(dst) + 0.5) * (src / dst) - 0.5
+        # Clamp the sample coordinates themselves: unclamped boundary coords go
+        # negative when upsampling, yielding negative weights and out-of-range output.
+        s = mx.clip(s, 0, src - 1)
+        i0 = mx.clip(mx.floor(s), 0, src - 1).astype(mx.int32)
+        i1 = mx.minimum(i0 + 1, src - 1)
+        frac = s - i0.astype(s.dtype)
+        cols = mx.arange(src)[None, :]
+        return (
+            (cols == i0[:, None]).astype(s.dtype) * (1 - frac)[:, None]
+            + (cols == i1[:, None]).astype(s.dtype) * frac[:, None]
+        )
+
+    # Matmul-form resize has a deterministic vjp on Metal; duplicate-index gathers
+    # backprop through scatter-add atomics and can wobble by ~1 ULP run to run.
+    out = mx.einsum("iy,nyxc->nixc", weights(h, size), img)
+    return mx.einsum("jx,nixc->nijc", weights(w, size), out)
 
 
 def _sharpness_kernel(channels: int) -> mx.array:
