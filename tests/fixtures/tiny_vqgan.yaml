@@ -1,0 +1,16 @@
+model:
+  target: taming.models.vqgan.VQModel
+  params:
+    embed_dim: 8
+    n_embed: 32
+    ddconfig:
+      double_z: false
+      z_channels: 8
+      resolution: 64
+      in_channels: 3
+      out_ch: 3
+      ch: 32  # taming GroupNorm requires channels divisible by 32
+      ch_mult: [1, 2]
+      num_res_blocks: 1
+      attn_resolutions: []
+      dropout: 0.0
