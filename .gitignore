@@ -4,3 +4,4 @@ __pycache__/
 outputs/
 .pytest_cache/
 .DS_Store
+.superpowers/

@@ -1,11 +1,13 @@
 import asyncio
 import io
+import math
 import threading
 import time
 from pathlib import Path
 from typing import Callable
 
 from localvqgan.pipeline.animation import Keyframe, render_animation
+from localvqgan.pipeline.backends import resolve_engine
 from localvqgan.pipeline.generator import GenerationOOM, Generator
 from localvqgan.pipeline.outputs import RunWriter
 from localvqgan.pipeline.settings import GenerationSettings
@@ -36,6 +38,14 @@ class JobManager:
         if self._generator is None:
             self._generator = self._factory()
         return self._generator
+
+    def _generator_for(self, engine_name: str):
+        if engine_name == "torch":
+            return self.generator  # existing warm torch generator
+        if getattr(self, "_mlx_generator", None) is None:
+            from localvqgan.pipeline.backends import make_generator
+            self._mlx_generator = make_generator("mlx")
+        return self._mlx_generator
 
     def status(self) -> dict:
         return dict(self._state)
@@ -105,14 +115,21 @@ class JobManager:
             self._publish({"state": "running", "run_id": writer.run_id,
                            "iteration": 0, "total": settings.iterations,
                            "phase": "loading"})
-            self.generator.load(settings.checkpoint, settings.clip_model)
+            engine_name, reason = resolve_engine(settings.engine, settings.checkpoint,
+                                                 settings.clip_model,
+                                                 width=settings.width, height=settings.height)
+            gen = self._generator_for(engine_name)
+            self._publish({"state": "running", "run_id": writer.run_id,
+                           "engine": engine_name, "engine_reason": reason,
+                           "phase": "loading"})
+            gen.load(settings.checkpoint, settings.clip_model)
             t0, last_img = time.time(), None
-            for u in self.generator.generate(settings, cancel=self._cancel):
+            for u in gen.generate(settings, cancel=self._cancel):
                 msg = {"state": "running", "run_id": writer.run_id,
                        "phase": "generating", "iteration": u.iteration,
                        "total": u.total,
                        "its_per_sec": round(u.iteration / max(time.time() - t0, 1e-6), 2)}
-                if u.loss is not None:
+                if u.loss is not None and math.isfinite(u.loss):
                     msg["loss"] = u.loss
                 if u.image is not None:
                     writer.save_frame(u.iteration, u.image)
@@ -121,7 +138,7 @@ class JobManager:
                 self._publish(msg)
             if last_img is not None:
                 writer.save_final(last_img)
-            writer.write_sidecar()
+            writer.write_sidecar({"engine_used": engine_name})
             self._publish({"state": "done", "run_id": writer.run_id})
         except GenerationOOM as e:
             self._publish({"state": "error", "error": str(e)})
@@ -134,7 +151,14 @@ class JobManager:
             self._publish({"state": "running", "run_id": writer.run_id,
                            "iteration": 0, "total": sum(k.frames for k in kfs),
                            "phase": "loading"})
-            self.generator.load(settings.checkpoint, settings.clip_model)
+            engine_name, reason = resolve_engine(settings.engine, settings.checkpoint,
+                                                 settings.clip_model,
+                                                 width=settings.width, height=settings.height)
+            gen = self._generator_for(engine_name)
+            self._publish({"state": "running", "run_id": writer.run_id,
+                           "engine": engine_name, "engine_reason": reason,
+                           "phase": "loading"})
+            gen.load(settings.checkpoint, settings.clip_model)
 
             def cb(done, total, img):
                 msg = {"state": "running", "run_id": writer.run_id,
@@ -143,7 +167,8 @@ class JobManager:
                     msg["image_jpeg"] = self._preview_jpeg(img)
                 self._publish(msg)
 
-            render_animation(self.generator, settings, kfs, writer, self._cancel, cb)
+            render_animation(gen, settings, kfs, writer, self._cancel, cb,
+                             extra={"engine_used": engine_name})
             self._publish({"state": "done", "run_id": writer.run_id})
         except GenerationOOM as e:
             self._publish({"state": "error", "error": str(e)})

@@ -15,6 +15,7 @@ class GenerationSettings:
     image_prompts: list[str] = field(default_factory=list)
     checkpoint: str = "imagenet_16384"
     clip_model: str = "ViT-B-32"
+    engine: str = "auto"  # auto | mlx | torch
     display_freq: int = 5
     precision: str = "auto"  # auto | fp16 | fp32
 

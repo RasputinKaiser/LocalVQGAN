@@ -127,10 +127,13 @@ def create_app(manager: JobManager) -> FastAPI:
 
     @app.get("/api/system")
     def system():
+        from localvqgan.pipeline import backends
         ram_gb = psutil.virtual_memory().total / 2**30
+        engines = ["torch"] + (["mlx"] if backends.mlx_available() else [])
         return {"device": manager.generator.device.type,
                 "total_ram_gb": round(ram_gb, 1),
-                "max_recommended_side": _max_side(ram_gb)}
+                "max_recommended_side": _max_side(ram_gb),
+                "engines": engines}
 
     @app.websocket("/ws")
     async def ws(sock: WebSocket):

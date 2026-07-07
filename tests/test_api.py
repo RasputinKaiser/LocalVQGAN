@@ -22,8 +22,21 @@ class FakeGenerator:
             yield FrameUpdate(i, 5, Image.new("RGB", (32, 32)), 0.5)
 
 
+class FakeGeneratorNaN(FakeGenerator):
+    def generate(self, settings, cancel=None):
+        losses = [float("nan"), 0.5, float("nan"), 0.25, 0.1]
+        for i, loss in enumerate(losses, start=1):
+            if cancel is not None and cancel.is_set():
+                return
+            time.sleep(0.03)
+            yield FrameUpdate(i, 5, Image.new("RGB", (32, 32)), loss)
+
+
 def make_client(tmp_path):
     mgr = JobManager(lambda: FakeGenerator(), tmp_path)
+    # keep the mlx path faked too: with the real mlx generator installed,
+    # engine=auto would otherwise construct it and load real checkpoints
+    mgr._mlx_generator = FakeGenerator()
     return TestClient(create_app(mgr)), mgr
 
 
@@ -50,6 +63,18 @@ def test_job_lifecycle(tmp_path):
     assert gallery[0]["run_id"] == run_id
 
 
+def test_animation_sidecar_records_engine(tmp_path):
+    client, _ = make_client(tmp_path)
+    r = client.post("/api/jobs", json={"type": "animation",
+        "settings": {"prompts": "x", "engine": "torch", "width": 32, "height": 32},
+        "keyframes": [{"prompts": "x", "frames": 2, "iterations_per_frame": 2}]})
+    assert r.status_code == 200
+    run_id = r.json()["run_id"]
+    _wait_idle(client)
+    s = client.get(f"/api/gallery/{run_id}/settings.json").json()
+    assert s["engine_used"] == "torch"
+
+
 def test_busy_returns_409(tmp_path):
     client, _ = make_client(tmp_path)
     client.post("/api/jobs", json={"type": "still", "settings": {"prompts": "x"}})
@@ -65,6 +90,29 @@ def test_cancel(tmp_path):
     assert client.post("/api/jobs/cancel").status_code == 200
     st = _wait_idle(client)
     assert st["state"] in ("done", "idle")
+
+
+def test_nan_loss_does_not_crash_status(tmp_path):
+    client, mgr = make_client(tmp_path)
+    mgr._mlx_generator = FakeGeneratorNaN()
+    r = client.post("/api/jobs", json={"type": "still",
+                                       "settings": {"prompts": "x", "iterations": 5,
+                                                    "engine": "mlx"}})
+    assert r.status_code == 200
+    saw_running = False
+    for _ in range(20):
+        status = client.get("/api/status")
+        assert status.status_code == 200
+        state = status.json()["state"]
+        if state == "running":
+            saw_running = True
+        if state in ("done", "error"):
+            break
+        time.sleep(0.01)
+    assert saw_running
+    st = _wait_idle(client)
+    assert st["state"] == "done"
+    assert client.get("/api/status").status_code == 200
 
 
 def test_system_info(tmp_path):
@@ -125,3 +173,19 @@ def test_init_image_upload_decoded(tmp_path):
     _wait_idle(client)
     uploads = list((tmp_path / "_uploads").glob("*.png"))
     assert len(uploads) == 1
+
+
+def test_system_reports_engines(tmp_path):
+    client, _ = make_client(tmp_path)
+    info = client.get("/api/system").json()
+    assert "engines" in info and "torch" in info["engines"]
+
+
+def test_engine_recorded_in_sidecar(tmp_path):
+    client, _ = make_client(tmp_path)
+    r = client.post("/api/jobs", json={"type": "still",
+        "settings": {"prompts": "x", "iterations": 5, "engine": "torch"}})
+    run_id = r.json()["run_id"]
+    _wait_idle(client)
+    s = client.get(f"/api/gallery/{run_id}/settings.json").json()
+    assert s["engine_used"] == "torch"
