@@ -12,10 +12,10 @@ imagenet_16384 checkpoint + CLIP ViT-B/32, 32 cutouts, fp16 weights.
 |---|---|---|
 | Original notebook code, faithful M1 port (pre-optimization) | **0.023 it/s** (43.5 s/iteration) | unusable |
 | LocalVQGAN torch engine (MPS) | **0.680 it/s** | 0.283 it/s |
-| LocalVQGAN MLX engine | **1.021 it/s** | 0.015 it/s (memory thrash — auto-routed to torch) |
+| LocalVQGAN MLX engine | **0.929 it/s** | 0.015 it/s (memory thrash — auto-routed to torch) |
 
-**Net: ~44× faster than the original code running on the same machine**
-(0.023 → 1.021 it/s at 256²). The original Colab notebook is CUDA-only and
+**Net: ~40× faster than the original code running on the same machine**
+(0.023 → 0.929 it/s at 256²). The original Colab notebook is CUDA-only and
 does not run on Apple Silicon at all without porting; the 0.023 it/s baseline
 is our faithful port before any optimization. A free-tier Colab T4 (the
 original's typical home) ran this workload at roughly 1–2 it/s *after* a
@@ -60,10 +60,23 @@ by a numeric parity test in CI):
 
 **Benchmark** (5 warmup + 20 timed iterations, sequential legs, one process;
 384² MLX result independently reproduced in an isolated mlx-only process to
-rule out contention): torch 0.680 / 0.283 it/s, MLX **1.021** / 0.015 it/s at
-256²/384². Ratio at 256² = **1.50×** → the `auto` engine prefers MLX (gate
+rule out contention): torch 0.680 / 0.283 it/s, MLX **0.929** / 0.015 it/s at
+256²/384². Ratio at 256² = **1.37×** → the `auto` engine prefers MLX (gate
 threshold 1.2×), and size-aware routing keeps ≥384² jobs on torch where MLX
 exceeds this machine's 16 GB working set. Commit `039fdf3`.
+
+**The fp16 NaN discovery and fix**: The original 1.021 it/s benchmark was
+measured while the engine was silently producing NaN losses from iteration 2
+onward due to two issues: `clamp_with_grad`'s custom-gradient dtype promotion
+bug when the VQGAN output was not exactly float32, and fp16 dynamic-range
+overflow in the VQGAN decoder's ResNet/Upsample chain at 256², where
+activations grew and hit Inf near the final upsample before decode. Direct
+layer-by-layer instrumentation confirmed the overflow path. The fix casts
+`clamp_with_grad` bounds to the input dtype, and VQGAN now loads and runs in
+float32 while CLIP stays float16, where no range or precision issue was
+observed. Re-measured at 256² with the fix: 0.873 / 0.929 / 0.985 it/s across
+3 runs (avg 0.929, torch reference 0.680 unchanged), ratio ~1.37, still
+clearing the 1.2x gate.
 
 ## Reproducing any number
 

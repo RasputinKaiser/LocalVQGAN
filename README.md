@@ -49,11 +49,14 @@ Measured on an Apple M1 (imagenet_16384/ViT-B-32, 32 cutouts, steady state:
 
 | size    | torch    | mlx      | ratio (mlx/torch) |
 |---------|----------|----------|--------------------|
-| 256x256 | 0.680 it/s | 1.021 it/s | 1.50 |
+| 256x256 | 0.680 it/s | 0.929 it/s | 1.37 |
 | 384x384 | 0.283 it/s | 0.015 it/s | 0.05 |
 
 The speed gate (`MLX_MEETS_SPEED_GATE`) is evaluated at 256x256/32cut per
-spec (ratio >= 1.2 to prefer mlx in `auto`); it currently passes. At 384x384
+spec (ratio >= 1.2 to prefer mlx in `auto`); it currently passes at 1.37x.
+The earlier 1.021 it/s MLX number was invalidated by a half-precision NaN bug
+in the MLX VQGAN backward, then fixed and re-measured; see `PERFORMANCE.md`.
+At 384x384
 this M1's unified memory is not enough to keep mlx's working set resident
 and it thrashes — torch stays the better choice at that size on this
 hardware, which is why the gate is pinned to the 256x256 measurement rather

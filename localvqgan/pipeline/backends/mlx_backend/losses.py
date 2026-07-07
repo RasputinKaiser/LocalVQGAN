@@ -9,12 +9,16 @@ def replace_grad(fwd: mx.array, bwd: mx.array) -> mx.array:
 
 @mx.custom_function
 def clamp_with_grad(x, lo, hi):
+    lo = mx.array(lo).astype(x.dtype)
+    hi = mx.array(hi).astype(x.dtype)
     return mx.clip(x, lo, hi)
 
 
 @clamp_with_grad.vjp
 def _clamp_vjp(primals, cotangent, output):
     x, lo, hi = primals
+    lo = mx.array(lo).astype(x.dtype)
+    hi = mx.array(hi).astype(x.dtype)
     clamped = mx.clip(x, lo, hi)
     keep = (cotangent * (x - clamped)) >= 0
     return cotangent * keep, None, None

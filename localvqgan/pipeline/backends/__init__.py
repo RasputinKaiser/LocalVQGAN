@@ -3,12 +3,17 @@ import platform
 
 # Task 8 acceptance gate (imagenet_16384/ViT-B-32, 32 cutouts, M1, 2026-07-07,
 # steady state: warmup 5 its then timed 20 its, torch.set_num_threads(2)):
-#   256x256: torch=0.680 it/s, mlx=1.021 it/s -> ratio 1.50 (>= 1.2 gate met)
+#   256x256: the original mlx=1.021 it/s measurement was invalidated by an
+#   fp16 NaN bug in the MLX VQGAN backward (clamp_with_grad dtype promotion
+#   plus fp16 decoder-activation overflow at 256x256). Fixed by running VQGAN
+#   in fp32 while keeping CLIP fp16, then re-measured mlx at 0.873 / 0.929 /
+#   0.985 it/s across 3 runs (avg 0.929) vs unchanged torch=0.680 it/s ->
+#   ratio ~1.37 (range 1.28-1.45), still >= 1.2 gate.
 #   384x384: torch=0.283 it/s, mlx=0.015 it/s -> mlx thrashes memory at this
 #   size on 8-16GB unified memory; gate is defined at 256x256/32cut per spec.
 MLX_MEETS_SPEED_GATE = True
 
-# measured 2026-07-07 on M1 16GB: mlx 1.02 it/s at 256² (1.50x torch) but
+# measured 2026-07-07 on M1 16GB: mlx 0.929 it/s at 256² (~1.37x torch) but
 # thrashes unified memory at 384² (0.015 it/s). Only two data points exist,
 # so auto stays conservative: mlx only at or below 256².
 MLX_MAX_AUTO_PIXELS = 256 * 256

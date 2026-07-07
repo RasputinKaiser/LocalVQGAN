@@ -1,3 +1,6 @@
+import math
+
+import numpy as np
 import pytest
 import torch
 
@@ -33,6 +36,10 @@ def test_mlx_end_to_end_small():
     g.load(name, "ViT-B-32")
     s = GenerationSettings(prompts="a matte painting of a lighthouse at dusk",
                            width=128, height=128, iterations=5, cutouts=8,
-                           seed=123, display_freq=5)
+                           seed=123, display_freq=1)
     frames = list(g.generate(s))
     assert frames[-1].image is not None and frames[-1].image.size == (128, 128)
+    losses = [f.loss for f in frames if f.loss is not None]
+    assert losses, "expected at least one loss value"
+    assert all(math.isfinite(l) for l in losses), losses
+    assert np.asarray(frames[-1].image).std() > 5

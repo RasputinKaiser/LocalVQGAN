@@ -10,8 +10,21 @@ def _swish(x):
     return x * mx.sigmoid(x)
 
 
+class Fp32GroupNorm(nn.GroupNorm):
+    def __call__(self, x):
+        orig_dtype = x.dtype
+        x32 = x.astype(mx.float32)
+        group_norm = (
+            self._pytorch_compatible_group_norm if self.pytorch_compatible else self._group_norm
+        )
+        y = group_norm(x32)
+        if "weight" in self:
+            y = self.weight.astype(mx.float32) * y + self.bias.astype(mx.float32)
+        return y.astype(orig_dtype)
+
+
 def _norm(channels: int):
-    return nn.GroupNorm(32, channels, eps=1e-6, pytorch_compatible=True)
+    return Fp32GroupNorm(32, channels, eps=1e-6, pytorch_compatible=True)
 
 
 class ResnetBlock(nn.Module):

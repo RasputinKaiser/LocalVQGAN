@@ -1,5 +1,6 @@
 import asyncio
 import io
+import math
 import threading
 import time
 from pathlib import Path
@@ -128,7 +129,7 @@ class JobManager:
                        "phase": "generating", "iteration": u.iteration,
                        "total": u.total,
                        "its_per_sec": round(u.iteration / max(time.time() - t0, 1e-6), 2)}
-                if u.loss is not None:
+                if u.loss is not None and math.isfinite(u.loss):
                     msg["loss"] = u.loss
                 if u.image is not None:
                     writer.save_frame(u.iteration, u.image)

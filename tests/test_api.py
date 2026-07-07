@@ -22,6 +22,16 @@ class FakeGenerator:
             yield FrameUpdate(i, 5, Image.new("RGB", (32, 32)), 0.5)
 
 
+class FakeGeneratorNaN(FakeGenerator):
+    def generate(self, settings, cancel=None):
+        losses = [float("nan"), 0.5, float("nan"), 0.25, 0.1]
+        for i, loss in enumerate(losses, start=1):
+            if cancel is not None and cancel.is_set():
+                return
+            time.sleep(0.03)
+            yield FrameUpdate(i, 5, Image.new("RGB", (32, 32)), loss)
+
+
 def make_client(tmp_path):
     mgr = JobManager(lambda: FakeGenerator(), tmp_path)
     # keep the mlx path faked too: with the real mlx generator installed,
@@ -80,6 +90,29 @@ def test_cancel(tmp_path):
     assert client.post("/api/jobs/cancel").status_code == 200
     st = _wait_idle(client)
     assert st["state"] in ("done", "idle")
+
+
+def test_nan_loss_does_not_crash_status(tmp_path):
+    client, mgr = make_client(tmp_path)
+    mgr._mlx_generator = FakeGeneratorNaN()
+    r = client.post("/api/jobs", json={"type": "still",
+                                       "settings": {"prompts": "x", "iterations": 5,
+                                                    "engine": "mlx"}})
+    assert r.status_code == 200
+    saw_running = False
+    for _ in range(20):
+        status = client.get("/api/status")
+        assert status.status_code == 200
+        state = status.json()["state"]
+        if state == "running":
+            saw_running = True
+        if state in ("done", "error"):
+            break
+        time.sleep(0.01)
+    assert saw_running
+    st = _wait_idle(client)
+    assert st["state"] == "done"
+    assert client.get("/api/status").status_code == 200
 
 
 def test_system_info(tmp_path):

@@ -52,9 +52,16 @@ class MlxGenerator:
         weights_path = convert.cached_vqgan_weights(checkpoint)
         cfg, _ = checkpoints.checkpoint_paths(checkpoint)
         weights = dict(mx.load(str(weights_path)).items())
-        self.vqgan = load_mlx_vqgan_from_arrays(cfg, weights, dtype=mx.float16)
+        # The VQGAN decoder's ResNet/Upsample chain overflows fp16's ~65504 max
+        # value at 256-degree resolution as generation progresses (measured:
+        # activations grow through the up-blocks and hit Inf at the final
+        # Upsample before decode, independent of GroupNorm/attention precision)
+        # -- run it in fp32. CLIP has no observed range/precision issue, so it
+        # stays fp16 for speed.
+        self.vqgan = load_mlx_vqgan_from_arrays(cfg, weights, dtype=mx.float32)
         if self.clip is None or self.clip.model_name != clip_model:
             self.clip = MlxClip.load(clip_model)
+        self.clip.set_dtype(mx.float16)
         self._loaded = (checkpoint, clip_model)
 
     def load_from_paths(
@@ -205,11 +212,15 @@ class MlxGenerator:
                     self._raise_oom_if_needed(exc)
                     raise
 
-                if i == 1 and not did_fp32_retry and not self._loss_is_finite(loss):
-                    did_fp32_retry = True
-                    self.vqgan.set_dtype(mx.float32)
-                    self.clip.set_dtype(mx.float32)
-                    break
+                if not self._loss_is_finite(loss):
+                    if i == 1 and not did_fp32_retry:
+                        did_fp32_retry = True
+                        self.vqgan.set_dtype(mx.float32)
+                        self.clip.set_dtype(mx.float32)
+                        break
+                    raise RuntimeError(
+                        "generation produced non-finite loss; try precision=fp32"
+                    )
 
                 want_image = i % s.display_freq == 0 or i == s.iterations
                 # Torch previews decode the same pre-update z that produced the reported loss.
