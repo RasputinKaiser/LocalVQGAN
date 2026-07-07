@@ -1,0 +1,85 @@
+import open_clip
+import torch
+from torch import nn
+from torch.nn import functional as F
+from torchvision import transforms
+
+
+class ReplaceGrad(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x_forward, x_backward):
+        ctx.shape = x_backward.shape
+        return x_forward
+
+    @staticmethod
+    def backward(ctx, grad_in):
+        return None, grad_in.sum_to_size(ctx.shape)
+
+
+replace_grad = ReplaceGrad.apply
+
+
+class ClampWithGrad(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input, min, max):
+        ctx.min = min
+        ctx.max = max
+        ctx.save_for_backward(input)
+        return input.clamp(min, max)
+
+    @staticmethod
+    def backward(ctx, grad_in):
+        input, = ctx.saved_tensors
+        return grad_in * (grad_in * (input - input.clamp(ctx.min, ctx.max)) >= 0), None, None
+
+
+clamp_with_grad = ClampWithGrad.apply
+
+
+def vector_quantize(x: torch.Tensor, codebook: torch.Tensor) -> torch.Tensor:
+    d = x.pow(2).sum(dim=-1, keepdim=True) + codebook.pow(2).sum(dim=1) - 2 * x @ codebook.T
+    indices = d.argmin(-1)
+    x_q = F.one_hot(indices, codebook.shape[0]).to(d.dtype) @ codebook
+    return replace_grad(x_q, x)
+
+
+class Prompt(nn.Module):
+    def __init__(self, embed: torch.Tensor, weight: float = 1.0, stop: float = float("-inf")):
+        super().__init__()
+        self.register_buffer("embed", embed)
+        self.register_buffer("weight", torch.as_tensor(weight))
+        self.register_buffer("stop", torch.as_tensor(stop))
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        input_normed = F.normalize(input.unsqueeze(1), dim=2)
+        embed_normed = F.normalize(self.embed.unsqueeze(0), dim=2)
+        dists = input_normed.sub(embed_normed).norm(dim=2).div(2).arcsin().pow(2).mul(2)
+        dists = dists * self.weight.sign()
+        return self.weight.abs() * replace_grad(dists, torch.maximum(dists, self.stop)).mean()
+
+
+_CLIP_NORM = transforms.Normalize(mean=(0.48145466, 0.4578275, 0.40821073),
+                                  std=(0.26862954, 0.26130258, 0.27577711))
+
+
+class ClipGuide:
+    def __init__(self, model_name: str, device: torch.device):
+        self.model_name = model_name
+        self.device = device
+        self.model, _, self.preprocess = open_clip.create_model_and_transforms(
+            model_name, pretrained="openai")
+        self.model = self.model.eval().requires_grad_(False).to(device)
+        self.tokenizer = open_clip.get_tokenizer(model_name)
+        size = self.model.visual.image_size
+        self.cut_size = size[0] if isinstance(size, (tuple, list)) else size
+
+    def embed_text(self, s: str) -> torch.Tensor:
+        toks = self.tokenizer([s]).to(self.device)
+        return self.model.encode_text(toks).float()
+
+    def embed_image(self, pil_img) -> torch.Tensor:
+        t = self.preprocess(pil_img).unsqueeze(0).to(self.device)
+        return self.model.encode_image(t).float()
+
+    def encode_cutouts(self, batch: torch.Tensor) -> torch.Tensor:
+        return self.model.encode_image(_CLIP_NORM(batch)).float()
