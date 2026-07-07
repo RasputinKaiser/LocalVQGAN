@@ -21,6 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-timeout", "httpx"]
+mlx = ["mlx>=0.21", "huggingface_hub", "safetensors"]
 
 [project.scripts]
 localvqgan = "localvqgan.server.main:run"

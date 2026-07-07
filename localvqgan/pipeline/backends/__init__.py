@@ -17,6 +17,8 @@ def mlx_supports(checkpoint: str, clip_model: str) -> bool:
         from localvqgan.pipeline.backends.mlx_backend import supports
     except ImportError:
         return False
+    if importlib.util.find_spec("localvqgan.pipeline.backends.mlx_backend.generator") is None:
+        return False  # capability map exists but the mlx generator does not yet
     return supports(checkpoint, clip_model)
 
 
