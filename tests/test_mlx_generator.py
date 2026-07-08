@@ -39,8 +39,8 @@ def test_fast_mode_eligibility():
     assert not g._fast_mode_eligible(GenerationSettings(width=64, height=64))  # off
     # too small: 16² -> 8×8 tokens, coarse 4×4 < 8
     assert not g._fast_mode_eligible(GenerationSettings(width=16, height=16, fast_mode=True))
-    # large canvas (fine stage would need the chunked path) is excluded
-    assert not g._fast_mode_eligible(
+    # large canvas is eligible: fine stage uses the chunked path, coarse stays small
+    assert g._fast_mode_eligible(
         GenerationSettings(width=512, height=512, cutouts=32, fast_mode=True))
 
 
@@ -59,6 +59,26 @@ def test_fast_mode_runs_two_stages_and_is_finite():
     assert frames[-1].image.size == (64, 64)
     final = np.asarray(frames[-1].image).astype(np.float32)
     assert final.std() > 5  # not a degenerate flat/NaN image
+
+
+def test_fast_mode_large_fine_stage_uses_chunked_path(monkeypatch):
+    # Route the 64² fine stage through the large-canvas (chunked + bf16 + cache
+    # bracket) machinery while the 32² coarse stage stays on the small path, by
+    # putting the pixel threshold between them. Exercises the dtype/cache
+    # transition at the stage boundary without a heavyweight real 512² run.
+    from localvqgan.pipeline.backends.mlx_backend import generator as gen
+    monkeypatch.setattr(gen, "MLX_LARGE_CANVAS_PIXEL_THRESHOLD", 32 * 32 + 1)
+    g = _tiny_generator()
+    assert gen._is_large_canvas(64, 64, 4) and not gen._is_large_canvas(32, 32, 4)
+    s = GenerationSettings(prompts="a red square", width=64, height=64,
+                           iterations=6, cutouts=4, seed=42, display_freq=1,
+                           fast_mode=True)
+    frames = list(g.generate(s))
+    assert [f.iteration for f in frames] == [1, 2, 3, 4, 5, 6]
+    assert frames[0].image.size == (32, 32)   # coarse (small path)
+    assert frames[-1].image.size == (64, 64)  # fine (chunked large path)
+    assert all(np.isfinite(f.loss) for f in frames)
+    assert np.asarray(frames[-1].image).astype(np.float32).std() > 5
 
 
 def test_adam_matches_torch_bias_correction():

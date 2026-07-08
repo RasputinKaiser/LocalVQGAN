@@ -1,6 +1,7 @@
 import logging
 import os
 import threading
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Iterator
 
@@ -504,10 +505,6 @@ class MlxGenerator:
     def _fast_mode_eligible(self, s: GenerationSettings) -> bool:
         if not getattr(s, "fast_mode", False) or self.vqgan is None:
             return False
-        # Increment 1: the fine stage must be a small canvas (the large-canvas
-        # chunked path isn't wired into the two-stage driver yet).
-        if _is_large_canvas(s.width, s.height, s.cutouts):
-            return False
         f = self.vqgan.f
         ftx, fty = s.width // f, s.height // f
         if ftx % 2 or fty % 2:
@@ -540,37 +537,49 @@ class MlxGenerator:
 
     def _optimize_resolution(
         self,
-        s: GenerationSettings,
-        width: int,
-        height: int,
+        stage_s: GenerationSettings,
         targets: list[tuple[mx.array, float, float]],
         z: mx.array,
         z_min: mx.array,
         z_max: mx.array,
         n_iters: int,
         global_start: int,
-        total: int,
         cancel: threading.Event | None,
     ):
-        """Optimize z at one fixed resolution, yielding FrameUpdates with global
-        iteration numbers. Returns the final z (via generator return)."""
-        def loss_and_out_fn(z_: mx.array) -> tuple[mx.array, mx.array]:
-            out = self._synth(z_)
-            embeds = self.clip.encode_cutouts(
-                make_cutouts(out, s.cutouts, self.clip.cut_size, s.cut_pow)
-            )
-            losses = [prompt_loss(embeds, t, w, stop) for t, w, stop in targets]
-            return _sum_losses(losses), out
+        """Optimize z for n_iters at the resolution encoded in stage_s (its
+        width/height set the output size and cutout chunking), yielding
+        FrameUpdates numbered from global_start. Returns the final z via the
+        generator return. Uses the chunked large-canvas machinery when the stage
+        canvas needs it, the compiled single-pass path otherwise — so the coarse
+        stage runs the cheap in-RAM path and only a >256² fine stage chunks."""
+        total = stage_s.iterations
+        large = _is_large_canvas(stage_s.width, stage_s.height, stage_s.cutouts)
+        z_orig = z  # init_weight anchor for this stage (default weight 0 -> unused)
+        if large:
+            synth, synth_pullback = self._large_canvas_fns()
+        else:
+            def loss_and_out_fn(z_: mx.array) -> tuple[mx.array, mx.array]:
+                out = self._synth(z_)
+                embeds = self.clip.encode_cutouts(
+                    make_cutouts(out, stage_s.cutouts, self.clip.cut_size,
+                                 stage_s.cut_pow)
+                )
+                losses = [prompt_loss(embeds, t, w, stop) for t, w, stop in targets]
+                return _sum_losses(losses), out
 
-        step = self._compile_step(mx.value_and_grad(loss_and_out_fn))
-        opt = make_adam(s.step_size)
+            step = self._compile_step(mx.value_and_grad(loss_and_out_fn))
+        opt = make_adam(stage_s.step_size)
         params = {"z": z}
         for k in range(n_iters):
             if cancel is not None and cancel.is_set():
                 return params["z"]
             i = global_start + k
             try:
-                (loss, out), grad = step(params["z"])
+                if large:
+                    loss, grad, out = self._chunked_value_grad_and_out(
+                        params["z"], z_orig, stage_s, targets, synth, synth_pullback)
+                else:
+                    (loss, out), grad = step(params["z"])
                 params = opt.apply_gradients({"z": grad}, params)
                 params["z"] = mx.clip(params["z"], z_min, z_max)
                 mx.eval(loss, params["z"])
@@ -579,7 +588,7 @@ class MlxGenerator:
                 raise
             if not self._loss_is_finite(loss):
                 raise _NonFiniteLoss(i)
-            want_image = i % s.display_freq == 0 or i == total
+            want_image = i % stage_s.display_freq == 0 or i == total
             img = self._to_pil(out) if want_image else None
             loss_value = float(np.array(loss).item()) if want_image else None
             yield FrameUpdate(i, total, img, loss_value)
@@ -594,32 +603,40 @@ class MlxGenerator:
         z_min, z_max = codebook.min(axis=0), codebook.max(axis=0)
         coarse_w, coarse_h, n_coarse = self._fast_coarse_dims(s)
         n_fine = s.iterations - n_coarse
+        coarse_s = replace(s, width=coarse_w, height=coarse_h)
+        coarse_large = _is_large_canvas(coarse_w, coarse_h, s.cutouts)
+        fine_large = _is_large_canvas(s.width, s.height, s.cutouts)
         upsample = mlx_nn.Upsample(scale_factor=2.0, mode="linear",
                                    align_corners=False)
 
         did_fp32_retry = False
         while True:
+            cache_limit_prev = None
             try:
                 mx.random.seed(seed)
-                # Both stages are <=256², so VQGAN stays fp32 (the historic path);
-                # CLIP is fp16 unless a non-finite loss forced an fp32 retry.
-                self.vqgan.set_dtype(mx.float32)
                 self.clip.set_dtype(mx.float32 if did_fp32_retry else mx.float16)
                 targets = self._build_targets(s)
 
+                # Coarse stage: half res (256² for a 512² target) -> fp32, in RAM.
+                self._select_vqgan_dtype(coarse_large, did_fp32_retry)
                 z = mx.array(self._init_z(s, coarse_w, coarse_h), dtype=mx.float32)
                 z = yield from self._optimize_resolution(
-                    s, coarse_w, coarse_h, targets, z, z_min, z_max,
-                    n_coarse, 1, s.iterations, cancel)
+                    coarse_s, targets, z, z_min, z_max, n_coarse, 1, cancel)
                 if cancel is not None and cancel.is_set():
                     return
 
                 z = mx.clip(upsample(z), z_min, z_max)  # latent -> full res
                 mx.eval(z)
 
+                # Fine stage: full res. If large (>256²) this switches VQGAN to
+                # bf16 and brackets the MLX cache, matching the pristine large
+                # path; the coarse stage already ran without that memory pressure.
+                self._select_vqgan_dtype(fine_large, did_fp32_retry)
+                if fine_large:
+                    cache_limit_prev = mx.set_cache_limit(
+                        _large_canvas_cache_limit_bytes())
                 yield from self._optimize_resolution(
-                    s, s.width, s.height, targets, z, z_min, z_max,
-                    n_fine, n_coarse + 1, s.iterations, cancel)
+                    s, targets, z, z_min, z_max, n_fine, n_coarse + 1, cancel)
                 return
             except _NonFiniteLoss as nf:
                 if nf.iteration == 1 and not did_fp32_retry:
@@ -627,6 +644,10 @@ class MlxGenerator:
                     continue
                 raise RuntimeError(
                     "generation produced non-finite loss; try the torch engine")
+            finally:
+                if cache_limit_prev is not None:
+                    mx.set_cache_limit(cache_limit_prev)
+                    mx.clear_cache()
 
     def generate(
         self,
