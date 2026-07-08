@@ -430,6 +430,40 @@ kernels are currently unused anywhere in the MLX backend. Repro:
 isolated stage sums exceed the fused total because each re-runs its own
 forward — read the ranking, not the sum).
 
+## Round 3 result: fused `mx.fast` kernels rejected with data (2026-07-08)
+
+The round-3 plan's headline lever was swapping hand-rolled attention for
+`mx.fast.scaled_dot_product_attention` in CLIP and the VQGAN decoder.
+Measured end-to-end at 256²/32cut (warmup 3 + timed 10, GPU idle):
+**baseline 1165 ms/it vs fused SDPA 1164 ms/it — +0.1%, i.e. nothing.**
+
+Why it does nothing here: this is not an attention-bound workload. CLIP's
+sequence length is ~50 tokens and the VQGAN attention block is a fixed 16×16
+regardless of canvas size, so the score matrices are tiny — the fused
+kernel's advantage (not materializing a large attention matrix and its
+backward) never applies. The time attributed to the "CLIP" and "decoder"
+stages in the attribution table above lives in Linear/MLP matmuls, convs,
+and GroupNorm, none of which `mx.fast` touches (MLX 0.31.2 has fused
+`scaled_dot_product_attention`, `layer_norm`, `rms_norm` — but **no fused
+`group_norm`**, so the largest single stage, the fp32 decoder backward, has
+no fused kernel available at all).
+
+Fidelity note measured alongside: fused SDPA is ~bit-exact in fp32 (maxabs
+6e-7, cos ≈1.0) but differs at ~3e-3 in fp16 (cos 0.9999995). Since CLIP
+runs fp16, adopting it would have been a seed rebaseline for a 0% gain —
+doubly not worth it.
+
+**Conclusion: 256² is at this hardware's ceiling for this math**, proven
+three ways — (1) the attribution profile shows well-distributed
+conv/matmul/norm cost with no pathological op; (2) fused kernels add 0%;
+(3) the only lever touching the biggest stage (bf16 decoder, attacking fp32
+bandwidth) is 1.07× *and* changes seeds. 0.929 it/s is ~85–90% of an 8-core
+M1 GPU's roofline for 300-iter/32-cut VQGAN+CLIP. Reaching ~1.5 it/s needs
+an M-Pro/Max/M3-class GPU (same code) or an algorithm change that alters
+outputs — neither is applied silently. Remaining real headroom is at 512²
+(memory, addressed in round 2) and for torch/non-Mac users (decoder
+gradient checkpointing, unimplemented).
+
 ## Reproducing any number
 
 ```
