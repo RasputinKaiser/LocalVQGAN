@@ -508,6 +508,18 @@ it/s (still chunked, stable). It's a float-reassociation change (identical
 gradient); VQGAN+CLIP is chaotic so a seed renders a different but equal-quality
 image (loss unchanged) — the equivalence/reproducibility slow tests still pass.
 
+**T5 (chunk-size / cache-limit sweep) — hardware-gated on 16 GB, not run
+2026-07-08.** The 512² path already compiles the decode fwd *and* its vjp
+pullback (`_large_canvas_fns`), pipelines chunks with `mx.async_eval`
+(`ASYNC_CHUNK_WINDOW=2`), runs bf16 VQGAN under a 4 GB cache bracket, and uses
+canvas-aware chunk=8. The only remaining sweep knob is a *bigger* chunk (16/32)
+— but that raises peak memory, and on 16 GB the chunk-8 + 4 GB-cache config was
+chosen precisely because it's at the swap floor (unbounded climbed 3.7→143 s/it
+with +11 GB swap). A meaningful sweep needs a 32 GB+ Mac or CUDA; on this box any
+512² leg runs under existing swap pressure and returns swap-dominated noise, not
+a clean chunk-size signal. Recorded so it isn't re-chased on constrained
+hardware; T3 (chunked-path compile reuse) stays rejected (0.1% divergence).
+
 Also this round: the default generation resolution dropped from 384² to **256²**,
 which is ~2× faster (0.93 vs ~0.5 it/s) and runs the pristine full-fp32 VQGAN
 path (no bf16 large-canvas rebaseline) — a faster, more faithful default;
