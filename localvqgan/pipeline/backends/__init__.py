@@ -9,14 +9,11 @@ import platform
 #   in fp32 while keeping CLIP fp16, then re-measured mlx at 0.873 / 0.929 /
 #   0.985 it/s across 3 runs (avg 0.929) vs unchanged torch=0.680 it/s ->
 #   ratio ~1.37 (range 1.28-1.45), still >= 1.2 gate.
-#   384x384: torch=0.283 it/s, mlx=0.015 it/s -> mlx thrashes memory at this
-#   size on 8-16GB unified memory; gate is defined at 256x256/32cut per spec.
+#   The old size cap was removed after the large-canvas MLX path gained
+#   chunked cutouts, bf16 VQGAN decode, and cache limiting: 512x512 now measures
+#   mlx ~0.22 it/s (0.215-0.247) while torch measures 0.010-0.011 it/s or DNF
+#   from working-set pressure on 16GB unified memory.
 MLX_MEETS_SPEED_GATE = True
-
-# measured 2026-07-07 on M1 16GB: mlx 0.929 it/s at 256² (~1.37x torch) but
-# thrashes unified memory at 384² (0.015 it/s). Only two data points exist,
-# so auto stays conservative: mlx only at or below 256².
-MLX_MAX_AUTO_PIXELS = 256 * 256
 
 
 def mlx_available() -> bool:
@@ -54,8 +51,6 @@ def resolve_engine(engine: str, checkpoint: str, clip_model: str,
         return "torch", "mlx below speed gate on this build"
     if not mlx_supports(checkpoint, clip_model):
         return "torch", f"{checkpoint} unsupported on mlx"
-    if width and height and width * height > MLX_MAX_AUTO_PIXELS:
-        return "torch", f"{width}x{height} exceeds mlx auto limit on this machine"
     return "mlx", "auto"
 
 

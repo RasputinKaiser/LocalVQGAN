@@ -1,6 +1,7 @@
 import threading
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 pytest.importorskip("mlx")
@@ -8,6 +9,27 @@ pytest.importorskip("mlx")
 from localvqgan.pipeline.settings import GenerationSettings
 
 FIXTURE = Path(__file__).parent / "fixtures" / "tiny_vqgan.yaml"
+
+
+def _tiny_generator():
+    from localvqgan.pipeline.backends.mlx_backend.generator import MlxGenerator
+
+    g = MlxGenerator()
+    g.load_from_paths(FIXTURE, None, "ViT-B-32")
+    return g
+
+
+def _tiny_settings(cutouts: int, iterations: int = 2):
+    s = GenerationSettings(prompts="a red square", width=64, height=64,
+                           iterations=iterations, cutouts=cutouts, seed=42,
+                           display_freq=1)
+    return s
+
+
+def _run_tiny_generation(cutouts: int):
+    g = _tiny_generator()
+    s = _tiny_settings(cutouts)
+    return list(g.generate(s))
 
 
 def test_adam_matches_torch_bias_correction():
@@ -33,21 +55,160 @@ def test_adam_matches_torch_bias_correction():
     assert np.allclose(np.array(m["z"]), t.detach().numpy(), atol=1e-5)
 
 
+def test_chunked_cutout_threshold_gate():
+    from localvqgan.pipeline.backends.mlx_backend.generator import (
+        _is_large_canvas,
+    )
+
+    assert not _is_large_canvas(256, 256, 32)
+    assert _is_large_canvas(512, 512, 32)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("cutouts", [4, 5])
+def test_chunked_cutouts_match_seeded_unchunked_generation(monkeypatch, cutouts):
+    from localvqgan.pipeline.backends.mlx_backend import generator
+    import mlx.core as mx
+
+    monkeypatch.setenv("LOCALVQGAN_MLX_COMPILE", "0")
+    monkeypatch.setattr(generator, "MLX_LARGE_CANVAS_PIXEL_THRESHOLD", 10**12)
+    unchunked = _run_tiny_generation(cutouts)
+
+    monkeypatch.setattr(generator, "MLX_LARGE_CANVAS_PIXEL_THRESHOLD", 0)
+    monkeypatch.setattr(generator, "CUTOUT_CHUNK_SIZE", 2)
+    # This isolates chunking math from the large-canvas bf16 precision policy.
+    monkeypatch.setattr(
+        generator.MlxGenerator,
+        "_select_vqgan_dtype",
+        lambda self, large_canvas, did_fp32_retry: self.vqgan.set_dtype(mx.float32),
+    )
+    chunked = _run_tiny_generation(cutouts)
+
+    unchunked_losses = np.array([f.loss for f in unchunked], dtype=np.float32)
+    chunked_losses = np.array([f.loss for f in chunked], dtype=np.float32)
+    assert np.allclose(chunked_losses, unchunked_losses, atol=1e-5), (
+        chunked_losses,
+        unchunked_losses,
+    )
+
+    # The RNG recipe is identical, but chunking changes only float accumulation
+    # order; one uint8 level allows harmless final-image quantization drift.
+    chunked_img = np.asarray(chunked[-1].image, dtype=np.int16)
+    unchunked_img = np.asarray(unchunked[-1].image, dtype=np.int16)
+    assert np.max(np.abs(chunked_img - unchunked_img)) <= 1
+
+
 @pytest.mark.slow
 def test_generates_and_is_self_reproducible():
-    from localvqgan.pipeline.backends.mlx_backend.generator import MlxGenerator
-
     def run():
-        g = MlxGenerator()
-        g.load_from_paths(FIXTURE, None, "ViT-B-32")
-        s = GenerationSettings(prompts="a red square", width=64, height=64,
-                               iterations=3, cutouts=4, seed=42, display_freq=1)
+        g = _tiny_generator()
+        s = _tiny_settings(cutouts=4, iterations=3)
         return list(g.generate(s))
 
     a = run()
     assert len(a) == 3 and a[-1].image is not None and a[-1].image.size == (64, 64)
     b = run()
     assert list(a[-1].image.getdata()) == list(b[-1].image.getdata())
+
+
+@pytest.mark.slow
+def test_large_canvas_path_is_self_reproducible(monkeypatch):
+    from localvqgan.pipeline.backends.mlx_backend import generator
+
+    monkeypatch.setattr(generator, "MLX_LARGE_CANVAS_PIXEL_THRESHOLD", 0)
+    monkeypatch.setattr(generator, "CUTOUT_CHUNK_SIZE", 2)
+
+    def run():
+        g = _tiny_generator()
+        s = _tiny_settings(cutouts=4, iterations=3)
+        return list(g.generate(s))
+
+    a = run()
+    assert len(a) == 3 and a[-1].image is not None and a[-1].image.size == (64, 64)
+    b = run()
+    assert list(a[-1].image.getdata()) == list(b[-1].image.getdata())
+
+
+@pytest.mark.slow
+def test_large_canvas_path_does_not_compile_chunk_closures(monkeypatch):
+    from localvqgan.pipeline.backends.mlx_backend import generator
+
+    compile_calls = 0
+    real_compile = generator.mx.compile
+
+    def counting_compile(fn):
+        nonlocal compile_calls
+        compile_calls += 1
+        return real_compile(fn)
+
+    monkeypatch.setattr(generator.mx, "compile", counting_compile)
+    monkeypatch.setattr(generator, "MLX_LARGE_CANVAS_PIXEL_THRESHOLD", 0)
+    monkeypatch.setattr(generator, "CUTOUT_CHUNK_SIZE", 2)
+
+    g = _tiny_generator()
+    s = _tiny_settings(cutouts=4, iterations=6)
+    list(g.generate(s))
+
+    assert compile_calls == 0
+
+
+@pytest.mark.slow
+def test_large_canvas_cache_limit_is_scoped_to_attempt(monkeypatch):
+    from localvqgan.pipeline.backends.mlx_backend import generator
+
+    events = []
+
+    def fake_set_cache_limit(limit):
+        events.append(("set", limit))
+        return "previous-limit"
+
+    def fake_clear_cache():
+        events.append(("clear", None))
+
+    monkeypatch.setattr(generator.mx, "set_cache_limit", fake_set_cache_limit)
+    monkeypatch.setattr(generator.mx, "clear_cache", fake_clear_cache)
+    monkeypatch.setattr(generator, "MLX_LARGE_CANVAS_PIXEL_THRESHOLD", 0)
+
+    g = _tiny_generator()
+    s = _tiny_settings(cutouts=2, iterations=1)
+    list(g.generate(s))
+
+    assert events[0] == ("set", 4 * 1024**3)
+    assert events[-2:] == [("set", "previous-limit"), ("clear", None)]
+
+
+@pytest.mark.slow
+def test_small_canvas_does_not_touch_cache_limit(monkeypatch):
+    from localvqgan.pipeline.backends.mlx_backend import generator
+
+    def fail_set_cache_limit(limit):
+        raise AssertionError(f"unexpected cache limit call: {limit}")
+
+    def fail_clear_cache():
+        raise AssertionError("unexpected cache clear call")
+
+    monkeypatch.setattr(generator.mx, "set_cache_limit", fail_set_cache_limit)
+    monkeypatch.setattr(generator.mx, "clear_cache", fail_clear_cache)
+    monkeypatch.setattr(generator, "MLX_LARGE_CANVAS_PIXEL_THRESHOLD", 10**12)
+
+    g = _tiny_generator()
+    s = _tiny_settings(cutouts=2, iterations=1)
+    list(g.generate(s))
+
+
+@pytest.mark.slow
+def test_vqgan_dtype_follows_large_canvas_policy(monkeypatch):
+    from localvqgan.pipeline.backends.mlx_backend import generator
+    import mlx.core as mx
+
+    small = _tiny_generator()
+    list(small.generate(_tiny_settings(cutouts=2)))
+    assert small.vqgan._dtype == mx.float32
+
+    monkeypatch.setattr(generator, "MLX_LARGE_CANVAS_PIXEL_THRESHOLD", 0)
+    large = _tiny_generator()
+    list(large.generate(_tiny_settings(cutouts=2)))
+    assert large.vqgan._dtype == mx.bfloat16
 
 
 @pytest.mark.slow
