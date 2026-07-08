@@ -190,6 +190,19 @@ previous route. A mathematically equivalent Adam rewrite was also rejected
 during implementation because it produced a one-level final-pixel drift; the
 kept helper mirrors MLX Adam's source operation order.
 
+**Closed by probe (2026-07-08): the fully-fused variant too.** The rejection
+above was the *two-compiled-function* form (extra graph boundary → the 0.651
+regression). The remaining untested T8 idea was folding value_and_grad + Adam +
+clip into ONE compiled graph (zero new launches). Cheap probe first: eager
+`_adam_update` + z-clamp + eval on the real 256² z shape (1,256,16,16) costs
+**0.41 ms/call — 0.04% of a ~1075 ms (0.93 it/s) iteration**, and in production
+that Adam already rides the `mx.eval(loss, z)` sync that happens anyway, so its
+true incremental cost is lower still. Folding can recover at most that 0.04% —
+~75× under the 3% stop threshold, in the noise — while carrying the known Adam
+seed-drift landmine. 256² is compute-bound (decode backward is 52%); there is no
+optimizer-launch overhead to recover. Not built. `LOCALVQGAN_MLX_COMPILED_
+OPTIMIZER=1` stays as the opt-in experimental path; the default is unchanged.
+
 **Rejected before benchmarking: weighted cutouts as a default.** The proposed
 full-image row/column matrix path for composing crop + bilinear resize matched
 the existing cutout path in forward evaluation, but failed the exact gradient
