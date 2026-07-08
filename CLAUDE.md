@@ -8,10 +8,11 @@ Historic VQGAN+CLIP recreation: same aesthetic/math as the 2021 Colab, modernize
 - outputs land in `./outputs/<run-id>/` with a `settings.json` sidecar (`engine_used` records resolution)
 
 ## Architecture facts
-- Two engines behind `localvqgan/pipeline/backends/`: `torch_backend.py` (MPS/CUDA/CPU) and `mlx_backend/` (Apple Silicon). Dispatcher: `backends.resolve_engine(engine, checkpoint, clip_model, width, height)` — auto prefers MLX only ≤256² (`MLX_MAX_AUTO_PIXELS`) and only while `MLX_MEETS_SPEED_GATE` holds (re-measure before flipping).
-- MLX runs VQGAN fp32 + CLIP fp16 (fp16 VQGAN overflows to Inf in the decoder up-chain at 256² — do not "optimize" it back to fp16 without instrumenting activation maxima).
+- Two engines behind `localvqgan/pipeline/backends/`: `torch_backend.py` (MPS/CUDA/CPU) and `mlx_backend/` (Apple Silicon). Dispatcher: `backends.resolve_engine(engine, checkpoint, clip_model, width, height)` — auto prefers MLX at ALL sizes while available+supported+`MLX_MEETS_SPEED_GATE` (re-measure before flipping the gate).
+- MLX precision policy: ≤256² VQGAN fp32 (historic bit-stable seeds — bf16 there was measured 1.07× and REJECTED for changing seeds) + CLIP fp16. >256² (`MLX_LARGE_CANVAS_PIXEL_THRESHOLD` in mlx generator): VQGAN bf16 + chunked cutouts (CHUNK=8, exact-math gradient accumulation via two-stage vjp) + 4GB `mx.set_cache_limit` bracket. Never fp16 VQGAN (Inf overflow in decoder up-chain).
+- MLX streams are thread-local; every load/set_dtype must `mx.eval` params or the next job thread dies with "There is no Stream(gpu, N)". The chunked path must stay EAGER — per-chunk `mx.eval` is illegal under `mx.compile`, and the fixed-shape reformulation for compile reuse diverged 0.1% (rejected).
 - Weight caches: `~/.cache/localvqgan/<ckpt>/` (torch), `<ckpt>/mlx/` + `clip/<model>/mlx/` (converted). faceshq/ade20k/ffhq/celebahq mirrors are dead upstream (`mirror_offline=True`).
-- Measured baselines (M1 16GB, 2026-07-07, 256²/32cut): torch 0.680 it/s, MLX 0.929 it/s. Any perf claim goes in PERFORMANCE.md with commit citation.
+- Measured baselines (M1 16GB, 2026-07-07, 32cut): 256² torch 0.680 / MLX 0.929 it/s (MLX ~85-90% of this GPU's roofline — don't chase 1.5 it/s here); 512² torch 0.010/DNF (>16GB working set) / MLX 0.16–0.25 it/s. Any perf claim goes in PERFORMANCE.md with commit citation.
 
 ## Gotchas that already bit us
 - NumPy `RuntimeWarning: invalid value encountered in cast` during generation/tests = NaN images. Treat as failure, never benign.

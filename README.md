@@ -67,31 +67,33 @@ Two generation backends share the same checkpoints and math:
   (`pip install -e ".[mlx]"`). Not all checkpoints are supported yet (see
   the capability map in `localvqgan/pipeline/backends/mlx_backend/`).
 
-Pick `torch`, `mlx`, or `auto` per generation in the GUI/API. `auto` uses
-mlx only when it's installed, supports the requested checkpoint, and meets
-the measured speed gate below; otherwise it falls back to torch.
-The `precision` setting applies to the torch engine only — mlx always runs
-VQGAN in fp32 and CLIP in fp16 (fp16 VQGAN overflows; see `PERFORMANCE.md`).
-Auto engine selection uses mlx only up to 256x256 based on this measurement,
-and larger sizes automatically fall back to torch; explicit mlx selection has no size limit.
+Pick `torch`, `mlx`, or `auto` per generation in the GUI/API. `auto` prefers
+mlx whenever it's installed, supports the requested checkpoint, and meets
+the measured speed gate; otherwise it falls back to torch.
+The `precision` setting applies to the torch engine only — on mlx, canvases
+up to 256x256 run the VQGAN in fp32 (the historic behavior, bit-stable
+seeds) and larger canvases run it in bf16 with chunked cutout evaluation
+and a bounded Metal cache, which is what makes them fit in unified memory
+at all (see `PERFORMANCE.md`). CLIP is fp16 everywhere.
 
-Measured on an Apple M1 (imagenet_16384/ViT-B-32, 32 cutouts, steady state:
-5 warmup its + 20 timed its, `torch.set_num_threads(2)`, 2026-07-07):
+Measured on an Apple M1 16 GB (imagenet_16384/ViT-B-32, 32 cutouts, steady
+state, 2026-07-07):
 
-| size    | torch    | mlx      | ratio (mlx/torch) |
-|---------|----------|----------|--------------------|
-| 256x256 | 0.680 it/s | 0.929 it/s | 1.37 |
-| 384x384 | 0.283 it/s | 0.015 it/s | 0.05 |
+| size    | torch    | mlx      |
+|---------|----------|----------|
+| 256x256 | 0.680 it/s | 0.929 it/s (1.37x) |
+| 512x512 | 0.010 it/s or DNF (working set exceeds 16 GB) | 0.16–0.25 it/s |
 
-The speed gate (`MLX_MEETS_SPEED_GATE`) is evaluated at 256x256/32cut per
-spec (ratio >= 1.2 to prefer mlx in `auto`); it currently passes at 1.37x.
-The earlier 1.021 it/s MLX number was invalidated by a half-precision NaN bug
-in the MLX VQGAN backward, then fixed and re-measured; see `PERFORMANCE.md`.
-At 384x384
-this M1's unified memory is not enough to keep mlx's working set resident
-and it thrashes — torch stays the better choice at that size on this
-hardware, which is why the gate is pinned to the 256x256 measurement rather
-than a blanket "mlx is faster" claim.
+The speed gate (`MLX_MEETS_SPEED_GATE`) is evaluated at 256x256/32cut
+(ratio >= 1.2 to prefer mlx in `auto`); it currently passes at 1.37x. At
+512x512 torch cannot keep its working set resident on 16 GB and collapses
+into swap, while the mlx large-canvas path is memory-bounded by
+construction — so `auto` routes every supported size to mlx. The 512x512
+spread (0.16–0.25) tracks ambient memory pressure; results are
+deterministic (identical loss across all benchmark runs). On machines with
+more unified memory, torch at 512x512 should behave like its 0.284 it/s
+compute profile suggests. The earlier 1.021 it/s MLX number was invalidated
+by a half-precision NaN bug, fixed and re-measured; see `PERFORMANCE.md`.
 
 ## Dev
 

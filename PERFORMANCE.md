@@ -78,6 +78,55 @@ observed. Re-measured at 256² with the fix: 0.873 / 0.929 / 0.985 it/s across
 3 runs (avg 0.929, torch reference 0.680 unchanged), ratio ~1.37, still
 clearing the 1.2x gate.
 
+## Round 2: large canvases (512²) — 2026-07-07 evening
+
+Target sizes per the user: 256² and 512². Findings, each measured on the
+reference M1 16 GB (ambient desktop load noted where it matters):
+
+**512² was unusable on both engines.** torch's full-loop working set exceeds
+16 GB: three attempts measured **0.010 / 0.011 it/s or DNF** (per-stage
+profile shows 0.284 it/s of pure compute — the gap is swap death, not
+arithmetic). MLX fp32 thrashed the same way (74–123 s/it, +4.5 GB swap).
+
+**The fix that shipped (`569cb35`..`4c56ec3`, merge `7b7bc96`)** — three
+parts, all gated:
+
+1. **Chunked cutout evaluation** above 256²: decode once per iteration
+   (two-stage `mx.vjp`), run the 32-cutout CLIP branch in chunks of 8 with
+   per-chunk `mx.eval` to bound peak memory. Equivalence vs the unchunked
+   path: loss diff **0.0** (cutn=4), 6e-8 (remainder case), images
+   pixel-identical.
+2. **bf16 VQGAN decode** above 256² only: bf16 has fp32's exponent range (the
+   fp16 Inf-overflow cannot recur); decode PSNR vs fp32 = **55.1 dB**
+   (gate >50). At 256² bf16 was measured **1.07×** and REJECTED — it changes
+   seeded outputs, and the historic fp32 behavior is the product there.
+3. **4 GB `mx.set_cache_limit`** during large-canvas generations (restored +
+   `mx.clear_cache()` after): without it the MLX buffer cache grows without
+   bound across iterations — 3.7 s/it climbing to 143 s/it with +11 GB swap
+   over 13 iterations; with it, stable ~4.0–6.2 s/it.
+
+**Result: MLX 512² = 0.16–0.25 it/s across four runs** (spread is ambient
+memory pressure; loss bit-identical across all runs — the path is
+deterministic), vs torch 0.010/DNF. **`auto` now prefers MLX at every
+supported size** (`4c56ec3` removed the 256² auto cap).
+
+**Rejected with data, round 2:**
+- bf16 at 256² (1.07×, changes seeds — see above).
+- Compiled chunk reuse: the fixed-shape reformulation needed to make
+  `mx.compile` amortize across chunks diverged from the eager reference by
+  ~0.1 % relative loss at iteration 1 — a real math change, not float
+  reassociation — caught by the seeded equivalence test and reverted. The
+  chunked path ships eager.
+
+**256² is near its ceiling on this GPU.** Per-stage MLX profile (compiled
+production step 1171 ms ≈ 0.85 it/s): decode fwd 336 ms, CLIP fwd 189 ms,
+cutouts 77 ms, backward ≈ 843 ms — no pathological op, and `mx.compile` is
+already worth 19 % (1446 → 1173 ms eager→compiled). Roofline math with the
+fp32 decoder puts this M1 (8-core GPU, ~2.6 TFLOPS fp32) at ~1.0–1.3 it/s
+best case: the measured 0.85–1.0 it/s is 80–90 % of ceiling. A 1.5 it/s
+256² target needs an M-Pro/Max-class GPU or math changes that would alter
+outputs; neither is applied silently.
+
 ## Reproducing any number
 
 ```
