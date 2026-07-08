@@ -20,8 +20,7 @@ same hardware, with the same math and the same look.
 
 ## Quick start
 
-LocalVQGAN needs Python >=3.11. Install Python first and make sure `python3`
-(macOS/Linux) or `py` (Windows) works from your terminal.
+LocalVQGAN needs Python 3.11 or newer.
 
 macOS/Linux, from a local clone:
 
@@ -31,8 +30,14 @@ Windows, from a local clone:
 
     run.bat
 
-Either command creates a project-local `.venv`, installs LocalVQGAN, starts the
-web app at http://127.0.0.1:8420, and opens a browser tab.
+Either command finds a suitable Python on your machine, creates a
+project-local `.venv`, installs LocalVQGAN into it, starts the web app at
+http://127.0.0.1:8420, and opens a browser tab — one command, nothing to
+configure first. On Apple Silicon it also installs the native MLX engine
+automatically, no extra step needed. If no Python 3.11+ is found, the script
+stops with a direct link to install one instead of failing with a confusing
+error. Re-running either script later just launches the app — the slow
+dependency install only happens once.
 
 Alternative one-command installs from a local clone, if you already use these
 tools:
@@ -62,8 +67,9 @@ supported NVIDIA setups; if CUDA is not available, PyTorch falls back to CPU.
 - Live preview streaming, gallery with reusable settings, timelapse MP4
   export, and keyframed zoom/pan animation mode.
 - Every image gets a `settings.json` sidecar for exact reproduction.
-- On Apple Silicon, an optional MLX engine (`pip install -e ".[mlx]"`) runs the
-  same checkpoints natively; pick the engine in the GUI (auto/mlx/torch).
+- On Apple Silicon, an optional MLX engine runs the same checkpoints
+  natively (`./run.sh` installs it automatically; elsewhere it's
+  `pip install -e ".[mlx]"`); pick the engine in the GUI (auto/mlx/torch).
 
 ## Credits
 
@@ -93,8 +99,9 @@ have the files, drop `config.yaml` + `model.ckpt` into
 Two generation backends share the same checkpoints and math:
 
 - **torch** — MPS/CUDA/CPU via PyTorch. Always available.
-- **mlx** — Apple Silicon only, native Metal via MLX. Optional
-  (`pip install -e ".[mlx]"`). Not all checkpoints are supported yet (see
+- **mlx** — Apple Silicon only, native Metal via MLX. Optional; `./run.sh`
+  installs it automatically on Apple Silicon, elsewhere it's
+  `pip install -e ".[mlx]"`. Not all checkpoints are supported yet (see
   the capability map in `localvqgan/pipeline/backends/mlx_backend/`).
 
 Pick `torch`, `mlx`, or `auto` per generation in the GUI/API. `auto` prefers
