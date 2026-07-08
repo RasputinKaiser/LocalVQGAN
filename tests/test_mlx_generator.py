@@ -72,6 +72,21 @@ def test_chunked_cutout_threshold_gate():
     assert _is_large_canvas(512, 512, 32)
 
 
+def test_cutout_chunk_size_adapts_to_canvas(monkeypatch):
+    from localvqgan.pipeline.backends.mlx_backend import generator
+
+    monkeypatch.delenv("LOCALVQGAN_MLX_CUTOUT_CHUNK_SIZE", raising=False)
+    # Large-but-fits canvas (<=384²): single pass over all cutouts, no chunking.
+    assert generator._cutout_chunk_size(384, 384, 32) == 32
+    # 512² still thrashes without chunking, so it stays chunked.
+    assert generator._cutout_chunk_size(512, 512, 32) == generator.CUTOUT_CHUNK_SIZE
+    # No canvas info → conservative default.
+    assert generator._cutout_chunk_size() == generator.CUTOUT_CHUNK_SIZE
+    # Explicit env override wins regardless of canvas.
+    monkeypatch.setenv("LOCALVQGAN_MLX_CUTOUT_CHUNK_SIZE", "4")
+    assert generator._cutout_chunk_size(384, 384, 32) == 4
+
+
 def test_large_canvas_tuning_knobs_default(monkeypatch):
     from localvqgan.pipeline.backends.mlx_backend import generator
 
@@ -228,7 +243,7 @@ def test_chunked_cutouts_match_seeded_unchunked_generation(monkeypatch, cutouts)
     unchunked = _run_tiny_generation(cutouts)
 
     monkeypatch.setattr(generator, "MLX_LARGE_CANVAS_PIXEL_THRESHOLD", 0)
-    monkeypatch.setattr(generator, "CUTOUT_CHUNK_SIZE", 2)
+    monkeypatch.setenv("LOCALVQGAN_MLX_CUTOUT_CHUNK_SIZE", "2")
     # This isolates chunking math from the large-canvas bf16 precision policy.
     monkeypatch.setattr(
         generator.MlxGenerator,
@@ -311,7 +326,7 @@ def test_large_canvas_path_is_self_reproducible(monkeypatch):
     from localvqgan.pipeline.backends.mlx_backend import generator
 
     monkeypatch.setattr(generator, "MLX_LARGE_CANVAS_PIXEL_THRESHOLD", 0)
-    monkeypatch.setattr(generator, "CUTOUT_CHUNK_SIZE", 2)
+    monkeypatch.setenv("LOCALVQGAN_MLX_CUTOUT_CHUNK_SIZE", "2")
 
     def run():
         g = _tiny_generator()
@@ -330,7 +345,7 @@ def test_large_canvas_separate_compile_matches_eager(monkeypatch):
     import mlx.core as mx
 
     monkeypatch.setattr(generator, "MLX_LARGE_CANVAS_PIXEL_THRESHOLD", 0)
-    monkeypatch.setattr(generator, "CUTOUT_CHUNK_SIZE", 2)
+    monkeypatch.setenv("LOCALVQGAN_MLX_CUTOUT_CHUNK_SIZE", "2")
     monkeypatch.setattr(
         generator.MlxGenerator,
         "_select_vqgan_dtype",
@@ -359,7 +374,7 @@ def test_large_canvas_async_chunks_match_sync(monkeypatch):
 
     monkeypatch.setenv("LOCALVQGAN_MLX_COMPILE", "0")
     monkeypatch.setattr(generator, "MLX_LARGE_CANVAS_PIXEL_THRESHOLD", 0)
-    monkeypatch.setattr(generator, "CUTOUT_CHUNK_SIZE", 2)
+    monkeypatch.setenv("LOCALVQGAN_MLX_CUTOUT_CHUNK_SIZE", "2")
     monkeypatch.setattr(
         generator.MlxGenerator,
         "_select_vqgan_dtype",
@@ -389,7 +404,7 @@ def test_large_canvas_async_chunks_are_scheduled(monkeypatch):
     monkeypatch.setenv("LOCALVQGAN_MLX_COMPILE", "0")
     monkeypatch.delenv("LOCALVQGAN_MLX_ASYNC_CHUNKS", raising=False)
     monkeypatch.setattr(generator, "MLX_LARGE_CANVAS_PIXEL_THRESHOLD", 0)
-    monkeypatch.setattr(generator, "CUTOUT_CHUNK_SIZE", 2)
+    monkeypatch.setenv("LOCALVQGAN_MLX_CUTOUT_CHUNK_SIZE", "2")
     monkeypatch.setattr(
         generator.MlxGenerator,
         "_select_vqgan_dtype",
@@ -418,7 +433,7 @@ def test_large_canvas_preview_reuses_loss_decode(monkeypatch):
 
     monkeypatch.setenv("LOCALVQGAN_MLX_COMPILE", "0")
     monkeypatch.setattr(generator, "MLX_LARGE_CANVAS_PIXEL_THRESHOLD", 0)
-    monkeypatch.setattr(generator, "CUTOUT_CHUNK_SIZE", 2)
+    monkeypatch.setenv("LOCALVQGAN_MLX_CUTOUT_CHUNK_SIZE", "2")
     monkeypatch.setattr(
         generator.MlxGenerator,
         "_select_vqgan_dtype",
@@ -457,7 +472,7 @@ def test_large_canvas_path_does_not_compile_chunk_closures(monkeypatch):
 
     monkeypatch.setattr(generator.mx, "compile", counting_compile)
     monkeypatch.setattr(generator, "MLX_LARGE_CANVAS_PIXEL_THRESHOLD", 0)
-    monkeypatch.setattr(generator, "CUTOUT_CHUNK_SIZE", 2)
+    monkeypatch.setenv("LOCALVQGAN_MLX_CUTOUT_CHUNK_SIZE", "2")
 
     g = _tiny_generator()
     s = _tiny_settings(cutouts=4, iterations=6)

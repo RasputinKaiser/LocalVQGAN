@@ -38,6 +38,14 @@ logger = logging.getLogger(__name__)
 # with no swap growth; bf16 decode PSNR vs fp32 measured 55.1dB (gate >50dB).
 MLX_LARGE_CANVAS_PIXEL_THRESHOLD = 256 * 256
 CUTOUT_CHUNK_SIZE = 8
+# Chunking bounds peak memory but adds per-chunk eval + Python-loop overhead.
+# It is only needed once the working set would thrash: measured 2026-07-08,
+# 384x384 runs a single pass (all cutouts at once) at 0.526 it/s vs 0.469 when
+# chunked by 8 (+12%) with NO swap growth, while 512x512 still thrashes without
+# chunking. So chunk only above this pixel count; at/below it, one pass. This is
+# a float-reassociation change (identical gradient math); VQGAN+CLIP is chaotic,
+# so a given seed renders a different but equal-quality image (loss unchanged).
+MLX_UNCHUNKED_MAX_PIXELS = 384 * 384
 MLX_LARGE_CANVAS_CACHE_LIMIT_GB = 4
 ASYNC_CHUNK_WINDOW = 2
 ADAM_BETA1 = 0.9
@@ -75,8 +83,18 @@ def _positive_float_env(name: str, default: float) -> float:
     return value
 
 
-def _cutout_chunk_size() -> int:
-    return _positive_int_env("LOCALVQGAN_MLX_CUTOUT_CHUNK_SIZE", CUTOUT_CHUNK_SIZE)
+def _cutout_chunk_size(
+    width: int | None = None, height: int | None = None, cutn: int | None = None
+) -> int:
+    # An explicit env override always wins (used to force a chunk size in tests
+    # and for benchmarking, regardless of canvas).
+    if "LOCALVQGAN_MLX_CUTOUT_CHUNK_SIZE" in os.environ:
+        return _positive_int_env("LOCALVQGAN_MLX_CUTOUT_CHUNK_SIZE", CUTOUT_CHUNK_SIZE)
+    # Otherwise chunk only when the canvas is large enough to need it: a single
+    # pass over all cutouts avoids per-chunk overhead where memory allows.
+    if width and height and cutn and width * height <= MLX_UNCHUNKED_MAX_PIXELS:
+        return cutn
+    return CUTOUT_CHUNK_SIZE
 
 
 def _large_canvas_cache_limit_bytes() -> int:
@@ -402,7 +420,7 @@ class MlxGenerator:
         spec = make_cutout_spec(out, s.cutouts, self.clip.cut_size, s.cut_pow)
         total_loss = mx.array(0.0)
         grad_out = mx.zeros_like(out)
-        chunk_size = _cutout_chunk_size()
+        chunk_size = _cutout_chunk_size(s.width, s.height, s.cutouts)
         async_chunks = _async_chunks_enabled()
         pending_chunks: list[tuple[mx.array, mx.array]] = []
 
