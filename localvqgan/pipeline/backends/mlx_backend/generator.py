@@ -38,19 +38,116 @@ logger = logging.getLogger(__name__)
 # with no swap growth; bf16 decode PSNR vs fp32 measured 55.1dB (gate >50dB).
 MLX_LARGE_CANVAS_PIXEL_THRESHOLD = 256 * 256
 CUTOUT_CHUNK_SIZE = 8
+MLX_LARGE_CANVAS_CACHE_LIMIT_GB = 4
+ASYNC_CHUNK_WINDOW = 2
+ADAM_BETA1 = 0.9
+ADAM_BETA2 = 0.999
+ADAM_EPS = 1e-8
 
 
 def _is_large_canvas(width: int, height: int, cutn: int) -> bool:
     return cutn > 0 and width * height > MLX_LARGE_CANVAS_PIXEL_THRESHOLD
 
 
+def _positive_int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive integer, got {raw!r}") from exc
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer, got {raw!r}")
+    return value
+
+
+def _positive_float_env(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive number, got {raw!r}") from exc
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive number, got {raw!r}")
+    return value
+
+
+def _cutout_chunk_size() -> int:
+    return _positive_int_env("LOCALVQGAN_MLX_CUTOUT_CHUNK_SIZE", CUTOUT_CHUNK_SIZE)
+
+
+def _large_canvas_cache_limit_bytes() -> int:
+    gb = _positive_float_env(
+        "LOCALVQGAN_MLX_CACHE_LIMIT_GB",
+        MLX_LARGE_CANVAS_CACHE_LIMIT_GB,
+    )
+    return int(gb * 1024**3)
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean flag, got {raw!r}")
+
+
+def _async_chunks_enabled() -> bool:
+    return _env_flag("LOCALVQGAN_MLX_ASYNC_CHUNKS", True)
+
+
+def _small_canvas_compiled_optimizer_enabled() -> bool:
+    return _env_flag("LOCALVQGAN_MLX_COMPILED_OPTIMIZER", False)
+
+
+def _small_canvas_preview_reuse_enabled() -> bool:
+    return _env_flag("LOCALVQGAN_MLX_SMALL_PREVIEW_REUSE", True)
+
+
+def _single_loss_sum_fastpath_enabled() -> bool:
+    return _env_flag("LOCALVQGAN_MLX_SINGLE_LOSS_SUM_FASTPATH", True)
+
+
+def _sum_losses(losses: list[mx.array]) -> mx.array:
+    if _single_loss_sum_fastpath_enabled() and len(losses) == 1:
+        return losses[0]
+    return sum(losses, mx.array(0.0))
+
+
 def make_adam(learning_rate):
     return optim.Adam(
         learning_rate=learning_rate,
-        betas=(0.9, 0.999),
-        eps=1e-8,
+        betas=(ADAM_BETA1, ADAM_BETA2),
+        eps=ADAM_EPS,
         bias_correction=True,
     )
+
+
+def _adam_update(
+    z: mx.array,
+    grad: mx.array,
+    m: mx.array,
+    v: mx.array,
+    step: mx.array,
+    learning_rate: float,
+) -> tuple[mx.array, mx.array, mx.array, mx.array]:
+    next_step = step + mx.array(1, dtype=mx.uint64)
+    next_m = ADAM_BETA1 * m + (1 - ADAM_BETA1) * grad
+    next_v = ADAM_BETA2 * v + (1 - ADAM_BETA2) * (grad * grad)
+    lr = mx.array(learning_rate).astype(grad.dtype)
+    c1 = (lr / (1 - ADAM_BETA1**next_step)).astype(grad.dtype)
+    c2 = mx.rsqrt(1 - ADAM_BETA2**next_step).astype(grad.dtype)
+    numerator = c1 * next_m
+    denominator = mx.sqrt(next_v) * c2 + ADAM_EPS
+    next_z = z - numerator / denominator
+    return next_z, next_m, next_v, next_step
 
 
 class MlxGenerator:
@@ -150,12 +247,14 @@ class MlxGenerator:
             return value_and_grad
 
         first_call = True
+        compile_engaged = False
 
         def step(z: mx.array) -> tuple[mx.array, mx.array]:
-            nonlocal first_call
+            nonlocal first_call, compile_engaged
             if first_call:
                 try:
                     out = compiled(z)
+                    compile_engaged = True
                     self.compile_engaged = True
                     first_call = False
                     return out
@@ -165,11 +264,96 @@ class MlxGenerator:
                         exc_info=True,
                     )
                     first_call = False
+                    compile_engaged = False
                     self.compile_engaged = False
                     return value_and_grad(z)
-            return compiled(z) if self.compile_engaged else value_and_grad(z)
+            return compiled(z) if compile_engaged else value_and_grad(z)
 
         return step
+
+    def _compile_small_canvas_optimizer_step(self, optimizer_step: Callable) -> Callable:
+        if os.environ.get("LOCALVQGAN_MLX_COMPILE", "1") == "0":
+            return optimizer_step
+        try:
+            compiled = mx.compile(optimizer_step)
+        except Exception:
+            logger.warning(
+                "MLX compile unavailable for optimizer step; falling back to eager",
+                exc_info=True,
+            )
+            return optimizer_step
+
+        first_call = True
+        compile_engaged = False
+
+        def step(*args):
+            nonlocal first_call, compile_engaged
+            if first_call:
+                try:
+                    out = compiled(*args)
+                    first_call = False
+                    compile_engaged = True
+                    return out
+                except Exception:
+                    logger.warning(
+                        "MLX compiled optimizer step failed; falling back to eager",
+                        exc_info=True,
+                    )
+                    first_call = False
+                    compile_engaged = False
+                    return optimizer_step(*args)
+            return compiled(*args) if compile_engaged else optimizer_step(*args)
+
+        return step
+
+    def _compile_large_canvas_fn(self, name: str, fn: Callable) -> Callable:
+        if os.environ.get("LOCALVQGAN_MLX_COMPILE", "1") == "0":
+            return fn
+        try:
+            compiled = mx.compile(fn)
+        except Exception:
+            logger.warning(
+                "MLX compile unavailable for %s; falling back to eager",
+                name,
+                exc_info=True,
+            )
+            return fn
+
+        first_call = True
+        compile_engaged = False
+
+        def wrapped(*args):
+            nonlocal first_call, compile_engaged
+            if first_call:
+                try:
+                    out = compiled(*args)
+                    mx.eval(out)
+                    first_call = False
+                    compile_engaged = True
+                    return out
+                except Exception:
+                    logger.warning(
+                        "MLX compiled %s failed; falling back to eager",
+                        name,
+                        exc_info=True,
+                    )
+                    first_call = False
+                    compile_engaged = False
+                    return fn(*args)
+            return compiled(*args) if compile_engaged else fn(*args)
+
+        return wrapped
+
+    def _large_canvas_fns(
+        self,
+    ) -> tuple[Callable[[mx.array], mx.array], Callable[[mx.array, mx.array], mx.array]]:
+        return (
+            self._compile_large_canvas_fn("large-canvas synth", self._synth),
+            self._compile_large_canvas_fn(
+                "large-canvas synth pullback",
+                self._synth_pullback,
+            ),
+        )
 
     def _select_vqgan_dtype(self, large_canvas: bool, did_fp32_retry: bool) -> None:
         assert self.vqgan is not None
@@ -203,34 +387,57 @@ class MlxGenerator:
             return pulled[0]
         return pulled
 
-    def _chunked_value_and_grad(
+    def _chunked_value_grad_and_out(
         self,
         z: mx.array,
         z_orig: mx.array,
         s: GenerationSettings,
         targets: list[tuple[mx.array, float, float]],
-    ) -> tuple[mx.array, mx.array]:
-        out = self._synth(z)
+        synth: Callable[[mx.array], mx.array] | None = None,
+        synth_pullback: Callable[[mx.array, mx.array], mx.array] | None = None,
+    ) -> tuple[mx.array, mx.array, mx.array]:
+        synth = self._synth if synth is None else synth
+        synth_pullback = self._synth_pullback if synth_pullback is None else synth_pullback
+        out = synth(z)
         spec = make_cutout_spec(out, s.cutouts, self.clip.cut_size, s.cut_pow)
         total_loss = mx.array(0.0)
         grad_out = mx.zeros_like(out)
+        chunk_size = _cutout_chunk_size()
+        async_chunks = _async_chunks_enabled()
+        pending_chunks: list[tuple[mx.array, mx.array]] = []
 
-        for start in range(0, s.cutouts, CUTOUT_CHUNK_SIZE):
-            end = min(start + CUTOUT_CHUNK_SIZE, s.cutouts)
+        def drain_oldest_chunk() -> None:
+            nonlocal total_loss, grad_out
+            chunk_loss_, chunk_grad_ = pending_chunks.pop(0)
+            mx.eval(chunk_loss_, chunk_grad_)
+            total_loss = total_loss + chunk_loss_
+            grad_out = grad_out + chunk_grad_
+
+        for start in range(0, s.cutouts, chunk_size):
+            end = min(start + chunk_size, s.cutouts)
             chunk_weight = (end - start) / s.cutouts
 
             def chunk_loss_fn(out_: mx.array) -> mx.array:
                 cutouts = apply_cutout_spec(out_, spec, self.clip.cut_size, start, end)
                 embeds = self.clip.encode_cutouts(cutouts)
                 losses = [prompt_loss(embeds, t, w, stop) for t, w, stop in targets]
-                return sum(losses, mx.array(0.0)) * chunk_weight
+                return _sum_losses(losses) * chunk_weight
 
             chunk_loss, chunk_grad = mx.value_and_grad(chunk_loss_fn)(out)
-            mx.eval(chunk_loss, chunk_grad)
-            total_loss = total_loss + chunk_loss
-            grad_out = grad_out + chunk_grad
+            if async_chunks:
+                mx.async_eval(chunk_loss, chunk_grad)
+                pending_chunks.append((chunk_loss, chunk_grad))
+                if len(pending_chunks) >= ASYNC_CHUNK_WINDOW:
+                    drain_oldest_chunk()
+            else:
+                mx.eval(chunk_loss, chunk_grad)
+                total_loss = total_loss + chunk_loss
+                grad_out = grad_out + chunk_grad
 
-        grad_z = self._synth_pullback(z, grad_out)
+        while pending_chunks:
+            drain_oldest_chunk()
+
+        grad_z = synth_pullback(z, grad_out)
 
         if s.init_weight:
             def init_loss_fn(z_: mx.array) -> mx.array:
@@ -241,7 +448,17 @@ class MlxGenerator:
             total_loss = total_loss + init_loss
             grad_z = grad_z + init_grad
 
-        return total_loss, grad_z
+        return total_loss, grad_z, out
+
+    def _chunked_value_and_grad(
+        self,
+        z: mx.array,
+        z_orig: mx.array,
+        s: GenerationSettings,
+        targets: list[tuple[mx.array, float, float]],
+    ) -> tuple[mx.array, mx.array]:
+        loss, grad_z, _ = self._chunked_value_grad_and_out(z, z_orig, s, targets)
+        return loss, grad_z
 
     def generate(
         self,
@@ -263,6 +480,9 @@ class MlxGenerator:
             z_orig = mx.array(z)
             params = {"z": z}
             opt = make_adam(s.step_size)
+            adam_m = mx.zeros_like(z)
+            adam_v = mx.zeros_like(z)
+            adam_step = mx.array(0, dtype=mx.uint64)
             large_canvas = _is_large_canvas(s.width, s.height, s.cutouts)
             self._select_vqgan_dtype(large_canvas, did_fp32_retry)
 
@@ -271,7 +491,7 @@ class MlxGenerator:
                 # Measured 512x512 bf16+chunked: unbounded MLX cache climbed
                 # 3.7->143s/it with +11GB swap over 13 its; 4GB stayed stable
                 # at ~4.0s/it mean over 10 its and releases cleanly afterward.
-                cache_limit_prev = mx.set_cache_limit(4 * 1024**3)
+                cache_limit_prev = mx.set_cache_limit(_large_canvas_cache_limit_bytes())
 
             try:
                 targets = [
@@ -285,22 +505,70 @@ class MlxGenerator:
                     arr = mx.array(np.asarray(img, dtype=np.float32)[None] / 255.0)
                     targets.append((self.clip.encode_cutouts(arr), 1.0, float("-inf")))
 
+                optimizer_in_step = False
+                optimizer_step = None
+                preview_from_step = False
                 if large_canvas:
-                    step = lambda z_: self._chunked_value_and_grad(
-                        z_, z_orig, s, targets
+                    synth, synth_pullback = self._large_canvas_fns()
+                    step = lambda z_: self._chunked_value_grad_and_out(
+                        z_,
+                        z_orig,
+                        s,
+                        targets,
+                        synth,
+                        synth_pullback,
                     )
                 else:
-                    def loss_fn(z_: mx.array) -> mx.array:
-                        out = self._synth(z_)
+                    def loss_from_out(z_: mx.array, out_: mx.array) -> mx.array:
                         embeds = self.clip.encode_cutouts(
-                            make_cutouts(out, s.cutouts, self.clip.cut_size, s.cut_pow)
+                            make_cutouts(out_, s.cutouts, self.clip.cut_size, s.cut_pow)
                         )
                         losses = [prompt_loss(embeds, t, w, stop) for t, w, stop in targets]
                         if s.init_weight:
                             losses.append(((z_ - z_orig) ** 2).mean() * s.init_weight / 2)
-                        return sum(losses, mx.array(0.0))
+                        return _sum_losses(losses)
 
-                    step = self._compile_step(mx.value_and_grad(loss_fn))
+                    def loss_and_out_fn(z_: mx.array) -> tuple[mx.array, mx.array]:
+                        out = self._synth(z_)
+                        return loss_from_out(z_, out), out
+
+                    def loss_fn(z_: mx.array) -> mx.array:
+                        loss_, _ = loss_and_out_fn(z_)
+                        return loss_
+
+                    if (
+                        os.environ.get("LOCALVQGAN_MLX_COMPILE", "1") == "0"
+                        or not _small_canvas_compiled_optimizer_enabled()
+                    ):
+                        if (
+                            _small_canvas_preview_reuse_enabled()
+                            and s.display_freq < s.iterations
+                        ):
+                            preview_from_step = True
+                            step = self._compile_step(mx.value_and_grad(loss_and_out_fn))
+                        else:
+                            step = self._compile_step(mx.value_and_grad(loss_fn))
+                    else:
+                        optimizer_in_step = True
+                        value_and_grad = mx.value_and_grad(loss_fn)
+                        step = self._compile_step(value_and_grad)
+
+                        def update_step(
+                            z_: mx.array,
+                            grad_: mx.array,
+                            m_: mx.array,
+                            v_: mx.array,
+                            adam_step_: mx.array,
+                        ) -> tuple[mx.array, mx.array, mx.array, mx.array]:
+                            next_z, next_m, next_v, next_step = _adam_update(
+                                z_, grad_, m_, v_, adam_step_, s.step_size
+                            )
+                            next_z = mx.clip(next_z, z_min, z_max)
+                            return next_z, next_m, next_v, next_step
+
+                        optimizer_step = self._compile_small_canvas_optimizer_step(
+                            update_step
+                        )
 
                 i = 1
                 while i <= s.iterations:
@@ -308,9 +576,29 @@ class MlxGenerator:
                         return
                     try:
                         preview_z = params["z"]
-                        loss, grad = step(preview_z)
-                        params = opt.apply_gradients({"z": grad}, params)
-                        params["z"] = mx.clip(params["z"], z_min, z_max)
+                        step_out = step(preview_z)
+                        if large_canvas:
+                            loss, grad, preview_out = step_out
+                        elif preview_from_step:
+                            (loss, preview_out), grad = step_out
+                        elif optimizer_in_step:
+                            assert optimizer_step is not None
+                            loss, grad = step_out
+                            next_z, adam_m, adam_v, adam_step = optimizer_step(
+                                preview_z,
+                                grad,
+                                adam_m,
+                                adam_v,
+                                adam_step,
+                            )
+                            params["z"] = next_z
+                            preview_out = None
+                        else:
+                            loss, grad = step_out
+                            preview_out = None
+                        if not optimizer_in_step:
+                            params = opt.apply_gradients({"z": grad}, params)
+                            params["z"] = mx.clip(params["z"], z_min, z_max)
                         mx.eval(loss, params["z"])
                     except Exception as exc:
                         self._raise_oom_if_needed(exc)
@@ -329,7 +617,9 @@ class MlxGenerator:
 
                     want_image = i % s.display_freq == 0 or i == s.iterations
                     # Torch previews decode the same pre-update z that produced the reported loss.
-                    img = self._to_pil(self._synth(preview_z)) if want_image else None
+                    if want_image and preview_out is None:
+                        preview_out = self._synth(preview_z)
+                    img = self._to_pil(preview_out) if want_image else None
                     loss_value = float(np.array(loss).item()) if want_image else None
                     yield FrameUpdate(i, s.iterations, img, loss_value)
                     i += 1

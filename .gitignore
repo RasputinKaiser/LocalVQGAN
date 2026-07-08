@@ -5,3 +5,7 @@ outputs/
 .pytest_cache/
 .DS_Store
 .superpowers/
+.Codex/
+.codex/
+AGENTS.md
+state.yaml

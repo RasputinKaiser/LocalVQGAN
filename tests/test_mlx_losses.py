@@ -1,3 +1,5 @@
+import threading
+
 import numpy as np
 import pytest
 
@@ -6,9 +8,19 @@ import mlx.core as mx
 import torch
 
 from localvqgan.pipeline.backends.mlx_backend.cutouts import (
-    _resize_bilinear, _sharpness, make_cutouts)
+    _resize_bilinear,
+    _sharpness,
+    _sharpness_kernel,
+    make_cutouts,
+    resize_identity_skip_enabled,
+    sharpness_kernel_cache_enabled,
+)
 from localvqgan.pipeline.backends.mlx_backend.losses import (
-    clamp_with_grad, prompt_loss, replace_grad, vector_quantize)
+    clamp_with_grad,
+    prompt_loss,
+    replace_grad,
+    vector_quantize,
+)
 from localvqgan.pipeline.clip_guide import Prompt
 
 
@@ -70,6 +82,31 @@ def test_resize_bilinear_downsample_matches_torch():
     assert np.max(np.abs(np.array(out) - ref.numpy())) < 1e-5
 
 
+def test_resize_identity_skip_matches_value_and_grad(monkeypatch):
+    rng = np.random.RandomState(7)
+    img_np = rng.rand(1, 32, 32, 3).astype(np.float32)
+
+    def run_with_flag(value: str):
+        monkeypatch.setenv("LOCALVQGAN_MLX_RESIZE_IDENTITY_SKIP", value)
+        return mx.value_and_grad(
+            lambda img: _resize_bilinear(img, 32).sum()
+        )(mx.array(img_np))
+
+    baseline_out, baseline_grad = run_with_flag("0")
+    candidate_out, candidate_grad = run_with_flag("1")
+    mx.eval(baseline_out, baseline_grad, candidate_out, candidate_grad)
+
+    assert np.array_equal(np.array(candidate_out), np.array(baseline_out))
+    assert np.array_equal(np.array(candidate_grad), np.array(baseline_grad))
+
+
+def test_resize_identity_skip_rejects_invalid_env(monkeypatch):
+    monkeypatch.setenv("LOCALVQGAN_MLX_RESIZE_IDENTITY_SKIP", "maybe")
+
+    with pytest.raises(ValueError, match="LOCALVQGAN_MLX_RESIZE_IDENTITY_SKIP"):
+        resize_identity_skip_enabled()
+
+
 def test_sharpness_preserves_border():
     batch = mx.ones((2, 8, 8, 3))
     factor = mx.array([1.3, 1.3])
@@ -82,6 +119,49 @@ def test_sharpness_preserves_border():
     assert np.array_equal(out_np[:, :, -1, :], batch_np[:, :, -1, :])
     assert out_np.min() >= 0
     assert out_np.max() <= 1
+
+
+def test_sharpness_kernel_cache_reuses_per_thread(monkeypatch):
+    from localvqgan.pipeline.backends.mlx_backend import cutouts
+
+    monkeypatch.delenv("LOCALVQGAN_MLX_SHARPNESS_KERNEL_CACHE", raising=False)
+    cutouts._thread_local.sharpness_kernels = {}
+
+    first = _sharpness_kernel(3)
+    second = _sharpness_kernel(3)
+
+    assert sharpness_kernel_cache_enabled()
+    assert first is second
+
+    other_thread_kernels = []
+
+    def run_in_thread():
+        other_thread_kernels.append(_sharpness_kernel(3))
+
+    t = threading.Thread(target=run_in_thread)
+    t.start()
+    t.join()
+
+    assert other_thread_kernels[0] is not first
+    assert np.array_equal(np.array(other_thread_kernels[0]), np.array(first))
+
+
+def test_sharpness_kernel_cache_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("LOCALVQGAN_MLX_SHARPNESS_KERNEL_CACHE", "0")
+
+    first = _sharpness_kernel(3)
+    second = _sharpness_kernel(3)
+
+    assert not sharpness_kernel_cache_enabled()
+    assert first is not second
+    assert np.array_equal(np.array(first), np.array(second))
+
+
+def test_sharpness_kernel_cache_rejects_invalid_env(monkeypatch):
+    monkeypatch.setenv("LOCALVQGAN_MLX_SHARPNESS_KERNEL_CACHE", "maybe")
+
+    with pytest.raises(ValueError, match="LOCALVQGAN_MLX_SHARPNESS_KERNEL_CACHE"):
+        sharpness_kernel_cache_enabled()
 
 
 def test_cutouts_shape_and_grad():

@@ -35,7 +35,7 @@
 - [ ] **Step 1: git init and gitignore**
 
 ```bash
-cd /Users/ianzvirbulis/LocalVQGAN && git init
+cd LocalVQGAN && git init
 ```
 
 `.gitignore`:

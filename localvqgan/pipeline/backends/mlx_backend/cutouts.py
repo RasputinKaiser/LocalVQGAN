@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+import os
+import threading
 
 import mlx.core as mx
 
@@ -14,9 +16,34 @@ class CutoutSpec:
     noise: mx.array
 
 
+_thread_local = threading.local()
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean flag, got {raw!r}")
+
+
+def sharpness_kernel_cache_enabled() -> bool:
+    return _env_flag("LOCALVQGAN_MLX_SHARPNESS_KERNEL_CACHE", True)
+
+
+def resize_identity_skip_enabled() -> bool:
+    return _env_flag("LOCALVQGAN_MLX_RESIZE_IDENTITY_SKIP", True)
+
+
 def _resize_bilinear(img: mx.array, size: int) -> mx.array:
     n, h, w, c = img.shape
     del n, c
+    if resize_identity_skip_enabled() and h == size and w == size:
+        return img
 
     def weights(src: int, dst: int) -> mx.array:
         s = (mx.arange(dst) + 0.5) * (src / dst) - 0.5
@@ -39,6 +66,22 @@ def _resize_bilinear(img: mx.array, size: int) -> mx.array:
 
 
 def _sharpness_kernel(channels: int) -> mx.array:
+    if not sharpness_kernel_cache_enabled():
+        return _build_sharpness_kernel(channels)
+
+    cache = getattr(_thread_local, "sharpness_kernels", None)
+    if cache is None:
+        cache = {}
+        _thread_local.sharpness_kernels = cache
+    if channels in cache:
+        return cache[channels]
+
+    kernel = _build_sharpness_kernel(channels)
+    cache[channels] = kernel
+    return kernel
+
+
+def _build_sharpness_kernel(channels: int) -> mx.array:
     k = mx.array([[1.0, 1.0, 1.0], [1.0, 5.0, 1.0], [1.0, 1.0, 1.0]]) / 13.0
     rows = []
     for out_channel in range(channels):
@@ -46,7 +89,9 @@ def _sharpness_kernel(channels: int) -> mx.array:
         for in_channel in range(channels):
             cols.append(k if in_channel == out_channel else mx.zeros_like(k))
         rows.append(mx.stack(cols, axis=-1))
-    return mx.stack(rows, axis=0)
+    kernel = mx.stack(rows, axis=0)
+    mx.eval(kernel)
+    return kernel
 
 
 def _sharpness(batch: mx.array, factor: mx.array) -> mx.array:
