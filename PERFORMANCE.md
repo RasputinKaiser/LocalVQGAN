@@ -542,6 +542,34 @@ session (no device); the it/s cost of recompute on hardware where 512² already
 fits is the usual ~1.2–1.3× decode-backward overhead, but it's the difference
 between DNF and a result on constrained machines.
 
+## Round 4: coarse-to-fine "Fast mode" (2026-07-08)
+
+The per-iteration ceiling is fixed, so this attacks a different axis: do the
+same 300 iterations, but run the first 60% at half resolution, upsample the
+latent (bilinear, `mlx.nn.Upsample`), and finish at full res. Same iteration /
+cutout / step budget — only the working-resolution schedule changes.
+
+**Measured 256² (3 seeds, real imagenet_16384 / ViT-B/32):** 289s → 222s =
+**1.30×**. Not 4× because the 32 CLIP cutouts are always resized to 224²
+regardless of canvas, so only the VQGAN decode shrinks (the 128² stage runs
+1.67 it/s vs 1.04 at 256² — a 1.6× per-iter, not 4×).
+
+**Does it preserve the look?** In distribution, yes. Averaged over 3 seeds the
+blue-cast (+26.6 → +27.8) and high-frequency grit (86.9 → 85.0) are unchanged
+vs pristine; only a mild ~10% luminance dip is consistent (125.0 → 112.3). A
+single pair looks different only because VQGAN+CLIP is chaotic — the coarse
+stage starts from a different-sized token grid, so the two runs diverge to
+unrelated images by ~iter 40 (same as any two seeds of the pristine path).
+Because it breaks exact per-seed reproducibility vs the historic recipe, it
+ships **opt-in** (`fast_mode`, GUI "Fast mode"), never the default.
+
+Implemented as an additive `_generate_coarse_to_fine` path (MLX) that reuses the
+existing primitives; the pristine default path is byte-for-byte unchanged.
+Gated to small-canvas targets with an exact 2× coarse→fine token grid (≥8 coarse
+tokens/side). 512² (where the decode dominates far more and the coarse stage
+also dodges the swap wall — projected larger win) and the torch engine are the
+next increment.
+
 ## Reproducing any number
 
 ```
