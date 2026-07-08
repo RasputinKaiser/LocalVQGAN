@@ -28,7 +28,10 @@ class FakeGeneratorNaN(FakeGenerator):
         for i, loss in enumerate(losses, start=1):
             if cancel is not None and cancel.is_set():
                 return
-            time.sleep(0.03)
+            # Generous vs. shared/throttled CI runners: the polling test below
+            # needs a window wide enough to reliably observe "running" even
+            # under scheduling jitter, not just on a quiet local machine.
+            time.sleep(0.1)
             yield FrameUpdate(i, 5, Image.new("RGB", (32, 32)), loss)
 
 
@@ -100,7 +103,7 @@ def test_nan_loss_does_not_crash_status(tmp_path):
                                                     "engine": "mlx"}})
     assert r.status_code == 200
     saw_running = False
-    for _ in range(20):
+    for _ in range(100):
         status = client.get("/api/status")
         assert status.status_code == 200
         state = status.json()["state"]
@@ -108,7 +111,7 @@ def test_nan_loss_does_not_crash_status(tmp_path):
             saw_running = True
         if state in ("done", "error"):
             break
-        time.sleep(0.01)
+        time.sleep(0.02)
     assert saw_running
     st = _wait_idle(client)
     assert st["state"] == "done"
