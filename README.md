@@ -1,7 +1,22 @@
 # LocalVQGAN
 
+[![tests](https://github.com/RasputinKaiser/LocalVQGAN/actions/workflows/tests.yml/badge.svg)](https://github.com/RasputinKaiser/LocalVQGAN/actions/workflows/tests.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-informational)](LICENSE)
+![python](https://img.shields.io/badge/python-3.11%2B-blue)
+![platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
+
 The classic VQGAN+CLIP (the 2021 Colab aesthetic), rebuilt to run fast and
-locally with a web GUI. Apple Silicon (MPS), NVIDIA (CUDA), and CPU.
+locally with a web GUI. Apple Silicon (MPS + native MLX), NVIDIA (CUDA), and
+CPU. No notebook, no per-session setup, no losing your gallery when the
+session dies — ~40x faster than a faithful port of the original code on the
+same hardware, with the same math and the same look.
+
+<p align="center">
+  <img src=".github/assets/enchanted_forest.png" width="256" alt="An enchanted forest, oil painting, trending on artstation">
+  <img src=".github/assets/cathedral_of_stars.png" width="256" alt="A cathedral of stars, oil painting, trending on artstation">
+  <img src=".github/assets/clockwork_queen.png" width="256" alt="A portrait of a clockwork queen, oil painting, trending on artstation">
+</p>
+<p align="center"><sub>Unretouched output at default settings (300 iterations, 32 cutouts, imagenet_16384). See <a href="PERFORMANCE.md">PERFORMANCE.md</a> for how fast.</sub></p>
 
 ## Quick start
 
@@ -49,6 +64,21 @@ supported NVIDIA setups; if CUDA is not available, PyTorch falls back to CPU.
 - Every image gets a `settings.json` sidecar for exact reproduction.
 - On Apple Silicon, an optional MLX engine (`pip install -e ".[mlx]"`) runs the
   same checkpoints natively; pick the engine in the GUI (auto/mlx/torch).
+
+## Credits
+
+This is a from-scratch reimplementation, ported and optimized for local use,
+of the generation technique from the community VQGAN+CLIP Colab notebook at
+[justinjohn0306/VQGAN-CLIP](https://github.com/justinjohn0306/VQGAN-CLIP)
+(`VQGAN+CLIP(Updated).ipynb`) — no notebook code is vendored here, only the
+same algorithm (latent optimization against a CLIP loss over augmented
+cutouts) and the same default hyperparameters, reproduced to match its 2021
+aesthetic. That notebook is itself part of a wider lineage of VQGAN+CLIP
+Colab notebooks that popularized the technique in 2021. The underlying
+models are from their original publications:
+
+- **VQGAN** — Esser, Rombach & Ommer, ["Taming Transformers for High-Resolution Image Synthesis"](https://github.com/CompVis/taming-transformers) (CVPR 2021).
+- **CLIP** — Radford et al., ["Learning Transferable Visual Models From Natural Language Supervision"](https://github.com/openai/CLIP) (OpenAI, 2021).
 
 ## Checkpoints
 

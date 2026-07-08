@@ -3,6 +3,7 @@ name = "localvqgan"
 version = "0.1.0"
 description = "Fast local VQGAN+CLIP with a web GUI"
 requires-python = ">=3.11"
+license = { file = "LICENSE" }
 dependencies = [
     "torch>=2.4",
     "torchvision",
