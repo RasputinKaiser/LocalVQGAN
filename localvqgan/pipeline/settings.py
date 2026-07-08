@@ -4,8 +4,8 @@ from dataclasses import asdict, dataclass, field
 @dataclass
 class GenerationSettings:
     prompts: str = ""
-    width: int = 384
-    height: int = 384
+    width: int = 256
+    height: int = 256
     iterations: int = 300
     cutouts: int = 32
     cut_pow: float = 1.0
