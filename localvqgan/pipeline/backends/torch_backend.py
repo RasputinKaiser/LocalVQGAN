@@ -18,6 +18,13 @@ from localvqgan.pipeline.settings import GenerationSettings
 from localvqgan.pipeline.vqgan import VQGANWrapper, load_vqgan
 
 
+# Above this canvas, checkpoint the decoder backward (recompute activations)
+# so 512²+ stops swap-dying / OOM-ing on ≤16GB Macs and low-VRAM CUDA. 384²
+# and below keep the full-activation fast path (they fit, and checkpointing
+# would only add recompute cost). Exact math either way — outputs unchanged.
+TORCH_DECODE_CHECKPOINT_MIN_PIXELS = 384 * 384
+
+
 @dataclass
 class FrameUpdate:
     iteration: int
@@ -95,6 +102,8 @@ class Generator:
         did_fp32_retry = False
         while True:
             self._set_model_dtype(precision)
+            self.vqgan.set_decoder_checkpointing(
+                s.width * s.height > TORCH_DECODE_CHECKPOINT_MIN_PIXELS)
             torch.manual_seed(seed)
 
             codebook = self.vqgan.codebook

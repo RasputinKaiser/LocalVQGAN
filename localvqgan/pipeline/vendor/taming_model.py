@@ -3,6 +3,7 @@
 import math
 import torch
 import torch.nn as nn
+import torch.utils.checkpoint
 import numpy as np
 
 
@@ -504,6 +505,22 @@ class Decoder(nn.Module):
                                         stride=1,
                                         padding=1)
 
+        # Opt-in gradient checkpointing of the upsampling levels: recompute each
+        # level's activations in backward instead of storing them. Exact math
+        # (the decode forward has no RNG), so seeds/outputs are unchanged; it
+        # only trades compute for peak memory. Enabled by the generator for large
+        # canvases where storing every level's activations would swap-die.
+        self.use_checkpoint = False
+
+    def _up_level(self, h, i_level):
+        for i_block in range(self.num_res_blocks + 1):
+            h = self.up[i_level].block[i_block](h, None)
+            if len(self.up[i_level].attn) > 0:
+                h = self.up[i_level].attn[i_block](h)
+        if i_level != 0:
+            h = self.up[i_level].upsample(h)
+        return h
+
     def forward(self, z):
         #assert z.shape[1:] == self.z_shape[1:]
         self.last_z_shape = z.shape
@@ -521,12 +538,11 @@ class Decoder(nn.Module):
 
         # upsampling
         for i_level in reversed(range(self.num_resolutions)):
-            for i_block in range(self.num_res_blocks+1):
-                h = self.up[i_level].block[i_block](h, temb)
-                if len(self.up[i_level].attn) > 0:
-                    h = self.up[i_level].attn[i_block](h)
-            if i_level != 0:
-                h = self.up[i_level].upsample(h)
+            if self.use_checkpoint and h.requires_grad:
+                h = torch.utils.checkpoint.checkpoint(
+                    self._up_level, h, i_level, use_reentrant=False)
+            else:
+                h = self._up_level(h, i_level)
 
         # end
         if self.give_pre_end:

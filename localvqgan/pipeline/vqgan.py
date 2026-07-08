@@ -44,6 +44,13 @@ class VQGANWrapper:
         self.model.to(dtype=dtype)
         self._dtype = dtype
 
+    def set_decoder_checkpointing(self, enabled: bool) -> None:
+        """Trade decode compute for peak memory (exact math). Used at large
+        canvases so low-VRAM/16GB machines don't swap-die on the backward."""
+        decoder = getattr(self.model, "decoder", None)
+        if decoder is not None:
+            decoder.use_checkpoint = enabled
+
     @property
     def codebook(self) -> torch.Tensor:
         q = self.model.quantize

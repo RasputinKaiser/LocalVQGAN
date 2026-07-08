@@ -500,6 +500,23 @@ which is ~2× faster (0.93 vs ~0.5 it/s) and runs the pristine full-fp32 VQGAN
 path (no bf16 large-canvas rebaseline) — a faster, more faithful default;
 larger sizes stay one click away.
 
+## Round 3 reliability: torch decoder gradient checkpointing (2026-07-08)
+
+The torch engine DNF'd at 512² on ≤16 GB (decoder backward stores every
+up-level's activations at once → >16 GB working set → swap death). The decode
+forward has no RNG, so `torch.utils.checkpoint` per up-level is **exact
+recompute**: identical output *and* identical gradient w.r.t. z (bit-for-bit —
+`test_decoder_checkpointing_is_exact`), verified recomputing in backward (each
+level's forward runs 2× under checkpointing vs 1× without, measured). It trades
+decode compute for peak memory, so it's gated ON only above 384²
+(`TORCH_DECODE_CHECKPOINT_MIN_PIXELS`): 256²/384² keep the full-activation fast
+path (they fit), 512²+ recompute per level so only one level's activations are
+live at a time. Purpose is the "runnable by anyone" charter goal — low-VRAM
+CUDA and 16 GB Macs that pick the torch engine. Not benchmarked on CUDA this
+session (no device); the it/s cost of recompute on hardware where 512² already
+fits is the usual ~1.2–1.3× decode-backward overhead, but it's the difference
+between DNF and a result on constrained machines.
+
 ## Reproducing any number
 
 ```
