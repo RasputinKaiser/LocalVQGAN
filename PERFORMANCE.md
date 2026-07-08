@@ -400,6 +400,36 @@ headroom is in decoder pullback and CLIP/cutout backward kernels; micro-probes
 that did not preserve exactness or speed, such as weighted cutouts and MLX
 FastPatchEmbed, remain rejected.
 
+## Round 3 groundwork: backward attribution (2026-07-08, M1 16GB, 256²/32cut)
+
+Before optimizing further we measured *where* the 1173 ms compiled iteration
+actually goes, splitting the backward with `mx.vjp` (eager, warmup 3 + timed
+10, GPU idle):
+
+| stage | ms |
+|---|---|
+| decoder backward (synth pullback of d(loss)/d(out)) | **611** |
+| CLIP fwd+bwd, all 32 cutouts | 556 |
+| decode forward | 261 |
+| CLIP+cutouts forward | 227 |
+| full fwd only | 493 |
+| full fwd+bwd (eager) | 1173 |
+
+**Finding: the fp32 VQGAN decoder *backward* is the single largest stage
+(~52% of the iteration) — larger than CLIP's entire forward+backward.** The
+decoder cost is its conv + `Fp32GroupNorm` up-chain (16→256 px), not
+attention (one 16×16 mid-block). This redirects round-3 priorities: fused
+attention (`mx.fast` SDPA) helps only the ~329 ms of CLIP backward, so the
+higher-value targets are (1) the fp32 decoder backward — a fused GroupNorm
+that avoids `Fp32GroupNorm`'s manual fp32 round-trip, or a bf16 decoder at
+256² (rebaseline decision: changes seeds, previously rejected on a
+whole-iteration 1.07× that understated the stage-local win), and (2) fused
+GroupNorm, which lightens both the decoder and CLIP norm passes. `mx.fast`
+kernels are currently unused anywhere in the MLX backend. Repro:
+`/private/tmp/prof_bwd.py` methodology (two `value_and_grad`/`vjp` splits;
+isolated stage sums exceed the fused total because each re-runs its own
+forward — read the ranking, not the sum).
+
 ## Reproducing any number
 
 ```
