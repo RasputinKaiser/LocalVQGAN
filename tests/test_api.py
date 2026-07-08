@@ -96,11 +96,17 @@ def test_cancel(tmp_path):
 
 
 def test_nan_loss_does_not_crash_status(tmp_path):
+    # torch, not mlx: the isfinite-sanitization path under test (jobs.py's
+    # `if u.loss is not None and math.isfinite(u.loss)`) doesn't branch on
+    # engine, and only torch is guaranteed available on every CI platform —
+    # requesting engine="mlx" explicitly raises on non-Apple-Silicon runners
+    # before the fake generator ever runs, since resolve_engine correctly
+    # refuses an unavailable explicit engine.
     client, mgr = make_client(tmp_path)
-    mgr._mlx_generator = FakeGeneratorNaN()
+    mgr._generator = FakeGeneratorNaN()
     r = client.post("/api/jobs", json={"type": "still",
                                        "settings": {"prompts": "x", "iterations": 5,
-                                                    "engine": "mlx"}})
+                                                    "engine": "torch"}})
     assert r.status_code == 200
     saw_running = False
     for _ in range(100):
