@@ -19,6 +19,12 @@ class GenerationSettings:
     engine: str = "auto"  # auto | mlx | torch
     display_freq: int = 5
     precision: str = "auto"  # auto | fp16 | fp32
+    # Coarse-to-fine: spend the first fraction of iterations at half resolution,
+    # then upsample the latent and finish at full res. ~1.3x faster at 256² and
+    # more at 512² for the same iteration/cutout/step budget. Changes the exact
+    # pixels (breaks historic seed reproducibility), so it's opt-in, never the
+    # default. MLX engine only for now (torch runs the pristine path).
+    fast_mode: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)

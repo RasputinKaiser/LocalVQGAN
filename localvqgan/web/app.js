@@ -95,6 +95,7 @@ function settingsFromForm() {
     engine: $("engine").value,
     display_freq: +$("display_freq").value,
     precision: $("precision").value,
+    fast_mode: $("fast_mode").checked,
   };
 }
 
@@ -207,6 +208,7 @@ async function loadGallery() {
                        "engine", "display_freq", "precision"])
         if (s[k] !== undefined && $(k)) $(k).value = s[k];
       if (s.checkpoint) $("checkpoint").value = s.checkpoint;
+      if (s.fast_mode !== undefined) $("fast_mode").checked = s.fast_mode;
       checkSize();
       window.scrollTo({ top: 0, behavior: "smooth" });
     };

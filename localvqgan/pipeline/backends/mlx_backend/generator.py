@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Callable, Iterator
 
 import mlx.core as mx
+import mlx.nn as mlx_nn
 import mlx.optimizers as optim
 import numpy as np
 from PIL import Image
@@ -51,6 +52,24 @@ ASYNC_CHUNK_WINDOW = 2
 ADAM_BETA1 = 0.9
 ADAM_BETA2 = 0.999
 ADAM_EPS = 1e-8
+
+# Coarse-to-fine ("Fast mode"): run this fraction of the iteration budget at half
+# resolution, then upsample the latent and finish at full res. 0.6 measured
+# ~1.30x at 256² over 3 seeds (2026-07-08) with the color-cast/grit distribution
+# unchanged vs the pristine path (only a mild ~10% luminance dip). The coarse
+# grid must stay at least this many tokens per side or the composition is too
+# blocky to upsample cleanly.
+FAST_COARSE_FRACTION = 0.6
+FAST_MIN_COARSE_TOKENS = 8
+
+
+class _NonFiniteLoss(RuntimeError):
+    """Signals a non-finite loss at a given iteration so the coarse-to-fine
+    driver can retry the whole run in fp32 (matching the pristine path)."""
+
+    def __init__(self, iteration: int):
+        super().__init__("non-finite loss")
+        self.iteration = iteration
 
 
 def _is_large_canvas(width: int, height: int, cutn: int) -> bool:
@@ -218,10 +237,13 @@ class MlxGenerator:
         out = self.vqgan.decode(z_q)
         return clamp_with_grad((out + 1) / 2, mx.array(0.0), mx.array(1.0))
 
-    def _init_z(self, s: GenerationSettings) -> mx.array:
+    def _init_z(self, s: GenerationSettings,
+                width: int | None = None, height: int | None = None) -> mx.array:
         assert self.vqgan is not None
         f = self.vqgan.f
-        toks_x, toks_y = s.width // f, s.height // f
+        width = s.width if width is None else width
+        height = s.height if height is None else height
+        toks_x, toks_y = width // f, height // f
         if s.init_image:
             img = Image.open(s.init_image).convert("RGB").resize(
                 (toks_x * f, toks_y * f), Image.LANCZOS
@@ -478,12 +500,143 @@ class MlxGenerator:
         loss, grad_z, _ = self._chunked_value_grad_and_out(z, z_orig, s, targets)
         return loss, grad_z
 
+    # --- Coarse-to-fine ("Fast mode") -------------------------------------
+    def _fast_mode_eligible(self, s: GenerationSettings) -> bool:
+        if not getattr(s, "fast_mode", False) or self.vqgan is None:
+            return False
+        # Increment 1: the fine stage must be a small canvas (the large-canvas
+        # chunked path isn't wired into the two-stage driver yet).
+        if _is_large_canvas(s.width, s.height, s.cutouts):
+            return False
+        f = self.vqgan.f
+        ftx, fty = s.width // f, s.height // f
+        if ftx % 2 or fty % 2:
+            return False  # need an exact 2x coarse->fine token grid
+        return (ftx // 2 >= FAST_MIN_COARSE_TOKENS
+                and fty // 2 >= FAST_MIN_COARSE_TOKENS)
+
+    def _fast_coarse_dims(self, s: GenerationSettings) -> tuple[int, int, int]:
+        f = self.vqgan.f
+        coarse_w = (s.width // f // 2) * f
+        coarse_h = (s.height // f // 2) * f
+        n_coarse = round(FAST_COARSE_FRACTION * s.iterations)
+        n_coarse = max(1, min(s.iterations - 1, n_coarse))
+        return coarse_w, coarse_h, n_coarse
+
+    def _build_targets(
+        self, s: GenerationSettings
+    ) -> list[tuple[mx.array, float, float]]:
+        targets = [
+            (self.clip.embed_text(p.text), p.weight, p.stop)
+            for p in parse_prompts(s.prompts)
+        ]
+        for path in s.image_prompts:
+            img = Image.open(path).convert("RGB").resize(
+                (self.clip.cut_size, self.clip.cut_size), Image.LANCZOS
+            )
+            arr = mx.array(np.asarray(img, dtype=np.float32)[None] / 255.0)
+            targets.append((self.clip.encode_cutouts(arr), 1.0, float("-inf")))
+        return targets
+
+    def _optimize_resolution(
+        self,
+        s: GenerationSettings,
+        width: int,
+        height: int,
+        targets: list[tuple[mx.array, float, float]],
+        z: mx.array,
+        z_min: mx.array,
+        z_max: mx.array,
+        n_iters: int,
+        global_start: int,
+        total: int,
+        cancel: threading.Event | None,
+    ):
+        """Optimize z at one fixed resolution, yielding FrameUpdates with global
+        iteration numbers. Returns the final z (via generator return)."""
+        def loss_and_out_fn(z_: mx.array) -> tuple[mx.array, mx.array]:
+            out = self._synth(z_)
+            embeds = self.clip.encode_cutouts(
+                make_cutouts(out, s.cutouts, self.clip.cut_size, s.cut_pow)
+            )
+            losses = [prompt_loss(embeds, t, w, stop) for t, w, stop in targets]
+            return _sum_losses(losses), out
+
+        step = self._compile_step(mx.value_and_grad(loss_and_out_fn))
+        opt = make_adam(s.step_size)
+        params = {"z": z}
+        for k in range(n_iters):
+            if cancel is not None and cancel.is_set():
+                return params["z"]
+            i = global_start + k
+            try:
+                (loss, out), grad = step(params["z"])
+                params = opt.apply_gradients({"z": grad}, params)
+                params["z"] = mx.clip(params["z"], z_min, z_max)
+                mx.eval(loss, params["z"])
+            except Exception as exc:
+                self._raise_oom_if_needed(exc)
+                raise
+            if not self._loss_is_finite(loss):
+                raise _NonFiniteLoss(i)
+            want_image = i % s.display_freq == 0 or i == total
+            img = self._to_pil(out) if want_image else None
+            loss_value = float(np.array(loss).item()) if want_image else None
+            yield FrameUpdate(i, total, img, loss_value)
+        return params["z"]
+
+    def _generate_coarse_to_fine(
+        self, s: GenerationSettings, cancel: threading.Event | None
+    ):
+        assert self.vqgan is not None and self.clip is not None
+        seed = s.seed if s.seed >= 0 else int.from_bytes(os.urandom(4), "little") % (2**31)
+        codebook = self.vqgan.codebook
+        z_min, z_max = codebook.min(axis=0), codebook.max(axis=0)
+        coarse_w, coarse_h, n_coarse = self._fast_coarse_dims(s)
+        n_fine = s.iterations - n_coarse
+        upsample = mlx_nn.Upsample(scale_factor=2.0, mode="linear",
+                                   align_corners=False)
+
+        did_fp32_retry = False
+        while True:
+            try:
+                mx.random.seed(seed)
+                # Both stages are <=256², so VQGAN stays fp32 (the historic path);
+                # CLIP is fp16 unless a non-finite loss forced an fp32 retry.
+                self.vqgan.set_dtype(mx.float32)
+                self.clip.set_dtype(mx.float32 if did_fp32_retry else mx.float16)
+                targets = self._build_targets(s)
+
+                z = mx.array(self._init_z(s, coarse_w, coarse_h), dtype=mx.float32)
+                z = yield from self._optimize_resolution(
+                    s, coarse_w, coarse_h, targets, z, z_min, z_max,
+                    n_coarse, 1, s.iterations, cancel)
+                if cancel is not None and cancel.is_set():
+                    return
+
+                z = mx.clip(upsample(z), z_min, z_max)  # latent -> full res
+                mx.eval(z)
+
+                yield from self._optimize_resolution(
+                    s, s.width, s.height, targets, z, z_min, z_max,
+                    n_fine, n_coarse + 1, s.iterations, cancel)
+                return
+            except _NonFiniteLoss as nf:
+                if nf.iteration == 1 and not did_fp32_retry:
+                    did_fp32_retry = True
+                    continue
+                raise RuntimeError(
+                    "generation produced non-finite loss; try the torch engine")
+
     def generate(
         self,
         s: GenerationSettings,
         cancel: threading.Event | None = None,
     ) -> Iterator[FrameUpdate]:
         assert self.vqgan is not None and self.clip is not None, "call load() first"
+        if self._fast_mode_eligible(s):
+            yield from self._generate_coarse_to_fine(s, cancel)
+            return
         seed = s.seed if s.seed >= 0 else int.from_bytes(os.urandom(4), "little") % (2**31)
 
         codebook = self.vqgan.codebook

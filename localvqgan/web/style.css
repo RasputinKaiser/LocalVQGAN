@@ -14,6 +14,10 @@ textarea, input, select { background: var(--bg); color: var(--text);
   border: 1px solid var(--line); border-radius: 6px; padding: 8px; font: inherit; }
 .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .hint { color: var(--dim); font-size: 11px; }
+label.check { flex-direction: row; align-items: center; gap: 8px; flex-wrap: wrap;
+  color: var(--text); font-size: 13px; cursor: pointer; }
+label.check input { width: auto; flex: none; margin: 0; cursor: pointer; }
+label.check .hint { flex-basis: 100%; }
 button { border: 1px solid var(--line); background: var(--panel); color: var(--text);
   border-radius: 6px; padding: 10px; cursor: pointer; font: inherit; }
 button.primary { background: var(--accent); color: #191919; font-weight: 600; }

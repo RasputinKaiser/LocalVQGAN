@@ -32,6 +32,35 @@ def _run_tiny_generation(cutouts: int):
     return list(g.generate(s))
 
 
+def test_fast_mode_eligibility():
+    g = _tiny_generator()  # tiny fixture: f=2
+    # 64² -> 32×32 tokens (even), coarse 16×16 >= 8 : eligible when flagged on
+    assert g._fast_mode_eligible(GenerationSettings(width=64, height=64, fast_mode=True))
+    assert not g._fast_mode_eligible(GenerationSettings(width=64, height=64))  # off
+    # too small: 16² -> 8×8 tokens, coarse 4×4 < 8
+    assert not g._fast_mode_eligible(GenerationSettings(width=16, height=16, fast_mode=True))
+    # large canvas (fine stage would need the chunked path) is excluded
+    assert not g._fast_mode_eligible(
+        GenerationSettings(width=512, height=512, cutouts=32, fast_mode=True))
+
+
+def test_fast_mode_runs_two_stages_and_is_finite():
+    g = _tiny_generator()
+    s = GenerationSettings(prompts="a red square", width=64, height=64,
+                           iterations=6, cutouts=4, seed=42, display_freq=1,
+                           fast_mode=True)
+    frames = list(g.generate(s))
+    # 0.6*6 -> 4 coarse + 2 fine, global iteration numbers 1..6
+    assert [f.iteration for f in frames] == [1, 2, 3, 4, 5, 6]
+    assert all(f.total == 6 for f in frames)
+    assert all(np.isfinite(f.loss) for f in frames)
+    # two-stage really happened: coarse frames decode at 32², fine at the 64² target
+    assert frames[0].image.size == (32, 32)
+    assert frames[-1].image.size == (64, 64)
+    final = np.asarray(frames[-1].image).astype(np.float32)
+    assert final.std() > 5  # not a degenerate flat/NaN image
+
+
 def test_adam_matches_torch_bias_correction():
     import mlx.core as mx
     import mlx.optimizers as mo
