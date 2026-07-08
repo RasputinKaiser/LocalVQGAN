@@ -483,6 +483,23 @@ look-preserving iteration-speed lever remains at 256² on this hardware.
 Remaining honest headroom is math-exact work at 512² (chunk compile reuse)
 and torch decoder gradient checkpointing for non-Mac users.
 
+## Round 3 win: chunk only when memory needs it (2026-07-08)
+
+The large-canvas path (>256²) chunked cutouts into groups of 8 at *every* size
+to bound memory — but that's only required near the 16 GB limit. Measured at
+384²/32cut: **single pass 0.526 it/s vs chunked-by-8 0.469 it/s (+12%)** with no
+swap growth, while 512² still thrashes without chunking. So `_cutout_chunk_size`
+is now canvas-aware: one pass at/below `MLX_UNCHUNKED_MAX_PIXELS` (384²), chunk
+of 8 above. Confirmed via the adaptive default: 384² 0.50–0.51 it/s, 512² 0.33
+it/s (still chunked, stable). It's a float-reassociation change (identical
+gradient); VQGAN+CLIP is chaotic so a seed renders a different but equal-quality
+image (loss unchanged) — the equivalence/reproducibility slow tests still pass.
+
+Also this round: the default generation resolution dropped from 384² to **256²**,
+which is ~2× faster (0.93 vs ~0.5 it/s) and runs the pristine full-fp32 VQGAN
+path (no bf16 large-canvas rebaseline) — a faster, more faithful default;
+larger sizes stay one click away.
+
 ## Reproducing any number
 
 ```
