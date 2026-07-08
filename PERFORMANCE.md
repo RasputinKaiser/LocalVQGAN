@@ -464,6 +464,25 @@ outputs — neither is applied silently. Remaining real headroom is at 512²
 (memory, addressed in round 2) and for torch/non-Mac users (decoder
 gradient checkpointing, unimplemented).
 
+## Round 3: convergence / early-stop rejected with data (2026-07-08)
+
+Tested whether the image converges before iteration 300 — if it did, stopping
+early would be a free, look-preserving speedup. It does not. At 256²/32cut
+(imagenet_16384, seed 42), the per-iteration mean absolute pixel change
+(0–255) holds at **~2.6–3.4 for the entire run and is 3.38 at iter 300** — the
+picture is still moving as fast at the end as in the middle. The *loss*
+plateaus early (0.79→~0.58 by iter 60, then flat), which is the trap: the loss
+settles but the image keeps accreting texture. Stopping at iteration 280 (7%
+fewer) already drifts **18.8/255 mean** from the full-300 result; stopping at
+200 drifts 22. These are visibly different images.
+
+Conclusion: the late iterations are load-bearing for the VQGAN+CLIP
+aesthetic — early-stop on a loss plateau would change the look and is
+rejected. Combined with the fused-kernel and bf16 results above, no
+look-preserving iteration-speed lever remains at 256² on this hardware.
+Remaining honest headroom is math-exact work at 512² (chunk compile reuse)
+and torch decoder gradient checkpointing for non-Mac users.
+
 ## Reproducing any number
 
 ```
