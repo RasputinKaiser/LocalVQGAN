@@ -153,6 +153,50 @@ def test_large_canvas_path_does_not_compile_chunk_closures(monkeypatch):
 
 
 @pytest.mark.slow
+def test_large_canvas_cache_limit_is_scoped_to_attempt(monkeypatch):
+    from localvqgan.pipeline.backends.mlx_backend import generator
+
+    events = []
+
+    def fake_set_cache_limit(limit):
+        events.append(("set", limit))
+        return "previous-limit"
+
+    def fake_clear_cache():
+        events.append(("clear", None))
+
+    monkeypatch.setattr(generator.mx, "set_cache_limit", fake_set_cache_limit)
+    monkeypatch.setattr(generator.mx, "clear_cache", fake_clear_cache)
+    monkeypatch.setattr(generator, "MLX_LARGE_CANVAS_PIXEL_THRESHOLD", 0)
+
+    g = _tiny_generator()
+    s = _tiny_settings(cutouts=2, iterations=1)
+    list(g.generate(s))
+
+    assert events[0] == ("set", 4 * 1024**3)
+    assert events[-2:] == [("set", "previous-limit"), ("clear", None)]
+
+
+@pytest.mark.slow
+def test_small_canvas_does_not_touch_cache_limit(monkeypatch):
+    from localvqgan.pipeline.backends.mlx_backend import generator
+
+    def fail_set_cache_limit(limit):
+        raise AssertionError(f"unexpected cache limit call: {limit}")
+
+    def fail_clear_cache():
+        raise AssertionError("unexpected cache clear call")
+
+    monkeypatch.setattr(generator.mx, "set_cache_limit", fail_set_cache_limit)
+    monkeypatch.setattr(generator.mx, "clear_cache", fail_clear_cache)
+    monkeypatch.setattr(generator, "MLX_LARGE_CANVAS_PIXEL_THRESHOLD", 10**12)
+
+    g = _tiny_generator()
+    s = _tiny_settings(cutouts=2, iterations=1)
+    list(g.generate(s))
+
+
+@pytest.mark.slow
 def test_vqgan_dtype_follows_large_canvas_policy(monkeypatch):
     from localvqgan.pipeline.backends.mlx_backend import generator
     import mlx.core as mx

@@ -257,6 +257,7 @@ class MlxGenerator:
 
         did_fp32_retry = False
         while True:
+            retry_fp32 = False
             mx.random.seed(seed)
             z = mx.array(self._init_z(s), dtype=mx.float32)
             z_orig = mx.array(z)
@@ -265,61 +266,78 @@ class MlxGenerator:
             large_canvas = _is_large_canvas(s.width, s.height, s.cutouts)
             self._select_vqgan_dtype(large_canvas, did_fp32_retry)
 
-            targets = [
-                (self.clip.embed_text(prompt.text), prompt.weight, prompt.stop)
-                for prompt in parse_prompts(s.prompts)
-            ]
-            for path in s.image_prompts:
-                img = Image.open(path).convert("RGB").resize(
-                    (self.clip.cut_size, self.clip.cut_size), Image.LANCZOS
-                )
-                arr = mx.array(np.asarray(img, dtype=np.float32)[None] / 255.0)
-                targets.append((self.clip.encode_cutouts(arr), 1.0, float("-inf")))
-
+            cache_limit_prev = None
             if large_canvas:
-                step = lambda z_: self._chunked_value_and_grad(z_, z_orig, s, targets)
-            else:
-                def loss_fn(z_: mx.array) -> mx.array:
-                    out = self._synth(z_)
-                    embeds = self.clip.encode_cutouts(
-                        make_cutouts(out, s.cutouts, self.clip.cut_size, s.cut_pow)
+                # Measured 512x512 bf16+chunked: unbounded MLX cache climbed
+                # 3.7->143s/it with +11GB swap over 13 its; 4GB stayed stable
+                # at ~4.0s/it mean over 10 its and releases cleanly afterward.
+                cache_limit_prev = mx.set_cache_limit(4 * 1024**3)
+
+            try:
+                targets = [
+                    (self.clip.embed_text(prompt.text), prompt.weight, prompt.stop)
+                    for prompt in parse_prompts(s.prompts)
+                ]
+                for path in s.image_prompts:
+                    img = Image.open(path).convert("RGB").resize(
+                        (self.clip.cut_size, self.clip.cut_size), Image.LANCZOS
                     )
-                    losses = [prompt_loss(embeds, t, w, stop) for t, w, stop in targets]
-                    if s.init_weight:
-                        losses.append(((z_ - z_orig) ** 2).mean() * s.init_weight / 2)
-                    return sum(losses, mx.array(0.0))
+                    arr = mx.array(np.asarray(img, dtype=np.float32)[None] / 255.0)
+                    targets.append((self.clip.encode_cutouts(arr), 1.0, float("-inf")))
 
-                step = self._compile_step(mx.value_and_grad(loss_fn))
+                if large_canvas:
+                    step = lambda z_: self._chunked_value_and_grad(
+                        z_, z_orig, s, targets
+                    )
+                else:
+                    def loss_fn(z_: mx.array) -> mx.array:
+                        out = self._synth(z_)
+                        embeds = self.clip.encode_cutouts(
+                            make_cutouts(out, s.cutouts, self.clip.cut_size, s.cut_pow)
+                        )
+                        losses = [prompt_loss(embeds, t, w, stop) for t, w, stop in targets]
+                        if s.init_weight:
+                            losses.append(((z_ - z_orig) ** 2).mean() * s.init_weight / 2)
+                        return sum(losses, mx.array(0.0))
 
-            i = 1
-            while i <= s.iterations:
-                if cancel is not None and cancel.is_set():
+                    step = self._compile_step(mx.value_and_grad(loss_fn))
+
+                i = 1
+                while i <= s.iterations:
+                    if cancel is not None and cancel.is_set():
+                        return
+                    try:
+                        preview_z = params["z"]
+                        loss, grad = step(preview_z)
+                        params = opt.apply_gradients({"z": grad}, params)
+                        params["z"] = mx.clip(params["z"], z_min, z_max)
+                        mx.eval(loss, params["z"])
+                    except Exception as exc:
+                        self._raise_oom_if_needed(exc)
+                        raise
+
+                    if not self._loss_is_finite(loss):
+                        if i == 1 and not did_fp32_retry:
+                            did_fp32_retry = True
+                            self.vqgan.set_dtype(mx.float32)
+                            self.clip.set_dtype(mx.float32)
+                            retry_fp32 = True
+                            break
+                        raise RuntimeError(
+                            "generation produced non-finite loss; try the torch engine"
+                        )
+
+                    want_image = i % s.display_freq == 0 or i == s.iterations
+                    # Torch previews decode the same pre-update z that produced the reported loss.
+                    img = self._to_pil(self._synth(preview_z)) if want_image else None
+                    loss_value = float(np.array(loss).item()) if want_image else None
+                    yield FrameUpdate(i, s.iterations, img, loss_value)
+                    i += 1
+                if i > s.iterations:
                     return
-                try:
-                    preview_z = params["z"]
-                    loss, grad = step(preview_z)
-                    params = opt.apply_gradients({"z": grad}, params)
-                    params["z"] = mx.clip(params["z"], z_min, z_max)
-                    mx.eval(loss, params["z"])
-                except Exception as exc:
-                    self._raise_oom_if_needed(exc)
-                    raise
-
-                if not self._loss_is_finite(loss):
-                    if i == 1 and not did_fp32_retry:
-                        did_fp32_retry = True
-                        self.vqgan.set_dtype(mx.float32)
-                        self.clip.set_dtype(mx.float32)
-                        break
-                    raise RuntimeError(
-                        "generation produced non-finite loss; try the torch engine"
-                    )
-
-                want_image = i % s.display_freq == 0 or i == s.iterations
-                # Torch previews decode the same pre-update z that produced the reported loss.
-                img = self._to_pil(self._synth(preview_z)) if want_image else None
-                loss_value = float(np.array(loss).item()) if want_image else None
-                yield FrameUpdate(i, s.iterations, img, loss_value)
-                i += 1
-            if i > s.iterations:
-                return
+            finally:
+                if large_canvas:
+                    mx.set_cache_limit(cache_limit_prev)
+                    mx.clear_cache()
+            if retry_fp32:
+                continue
