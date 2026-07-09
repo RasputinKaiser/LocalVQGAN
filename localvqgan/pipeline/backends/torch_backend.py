@@ -48,6 +48,7 @@ class Generator:
         self.vqgan: VQGANWrapper | None = None
         self.clip: ClipGuide | None = None
         self._loaded: tuple[str, str] | None = None
+        self.last_seed: int | None = None
 
     def load(self, checkpoint: str, clip_model: str) -> None:
         if self._loaded == (checkpoint, clip_model):
@@ -177,6 +178,7 @@ class Generator:
         self, s: GenerationSettings, cancel: threading.Event | None
     ) -> Iterator[FrameUpdate]:
         seed = s.seed if s.seed >= 0 else int(torch.randint(0, 2**31 - 1, ()).item())
+        self.last_seed = seed  # -1 requests resolve here; the sidecar records it
         precision = s.precision
         did_fp32_retry = False
         while True:
@@ -254,6 +256,7 @@ class Generator:
             yield from self._generate_coarse_to_fine(s, cancel)
             return
         seed = s.seed if s.seed >= 0 else int(torch.randint(0, 2**31 - 1, ()).item())
+        self.last_seed = seed  # -1 requests resolve here; the sidecar records it
 
         precision = s.precision
         did_fp32_retry = False

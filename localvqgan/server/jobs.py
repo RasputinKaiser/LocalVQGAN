@@ -183,7 +183,10 @@ class JobManager:
                 self._publish(msg)
             if last_img is not None:
                 writer.save_final(last_img)
-            writer.write_sidecar({"engine_used": engine_name})
+            # seed_used makes seed=-1 runs reproducible: the engine records
+            # the seed it actually drew, and Reuse feeds it back
+            writer.write_sidecar({"engine_used": engine_name,
+                                  "seed_used": getattr(gen, "last_seed", None)})
             self._publish({"state": "done", "run_id": writer.run_id})
         except GenerationOOM as e:
             self._publish({"state": "error", "error": str(e)})

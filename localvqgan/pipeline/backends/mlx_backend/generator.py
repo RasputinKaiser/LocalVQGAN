@@ -193,6 +193,7 @@ class MlxGenerator:
         self.vqgan: MlxVQGAN | None = None
         self.clip: MlxClip | None = None
         self._loaded: tuple[str, str] | None = None
+        self.last_seed: int | None = None
         self.device = type("MlxDevice", (), {"type": "mlx"})()
         self.compile_engaged = False
 
@@ -599,6 +600,7 @@ class MlxGenerator:
     ):
         assert self.vqgan is not None and self.clip is not None
         seed = s.seed if s.seed >= 0 else int.from_bytes(os.urandom(4), "little") % (2**31)
+        self.last_seed = seed  # -1 requests resolve here; the sidecar records it
         codebook = self.vqgan.codebook
         z_min, z_max = codebook.min(axis=0), codebook.max(axis=0)
         coarse_w, coarse_h, n_coarse = self._fast_coarse_dims(s)
@@ -659,6 +661,7 @@ class MlxGenerator:
             yield from self._generate_coarse_to_fine(s, cancel)
             return
         seed = s.seed if s.seed >= 0 else int.from_bytes(os.urandom(4), "little") % (2**31)
+        self.last_seed = seed  # -1 requests resolve here; the sidecar records it
 
         codebook = self.vqgan.codebook
         z_min = codebook.min(axis=0)

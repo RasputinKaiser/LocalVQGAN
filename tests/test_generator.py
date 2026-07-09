@@ -120,6 +120,26 @@ def test_seed_reproducibility_cpu():
 
 
 @pytest.mark.slow
+def test_random_seed_run_reproducible_via_recorded_seed():
+    # seed=-1 rolls a random seed; the engine records it (last_seed -> the
+    # sidecar's seed_used) and re-running with it must be pixel-identical
+    def run(seed):
+        torch.manual_seed(0)  # pin the fixture's random weights
+        g = Generator(torch.device("cpu"))
+        g.load_from_paths(FIXTURE, None, "ViT-B-32")
+        s = GenerationSettings(prompts="a red square", width=64, height=64,
+                               iterations=3, cutouts=4, seed=seed, display_freq=1)
+        frames = list(g.generate(s))
+        return g.last_seed, frames[-1].image
+
+    drawn_seed, first = run(-1)
+    assert drawn_seed is not None and drawn_seed >= 0
+    replay_seed, second = run(drawn_seed)
+    assert replay_seed == drawn_seed
+    assert np.array_equal(np.asarray(first), np.asarray(second))
+
+
+@pytest.mark.slow
 def test_cancel_stops_early():
     g = Generator(torch.device("cpu"))
     g.load_from_paths(FIXTURE, None, "ViT-B-32")
