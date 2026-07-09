@@ -5,24 +5,31 @@ description = "Fast local VQGAN+CLIP with a web GUI"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
 dependencies = [
-    "torch>=2.4",
-    "torchvision",
-    "open-clip-torch>=2.24",
-    "kornia>=0.7",
-    "einops",
     "omegaconf",
     "numpy",
     "pillow",
+    "regex",
     "fastapi",
     "uvicorn[standard]",
     "imageio[ffmpeg]",
     "requests",
     "psutil",
+    "huggingface_hub",
+    # Engines: Apple Silicon defaults to the slim MLX install (no ~2GB torch
+    # stack); every other platform defaults to torch. `localvqgan[torch]` adds
+    # torch on Apple Silicon too (needed once to convert non-prebuilt weights).
+    "mlx>=0.21; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "torch>=2.4; sys_platform != 'darwin' or platform_machine != 'arm64'",
+    "torchvision; sys_platform != 'darwin' or platform_machine != 'arm64'",
+    "open-clip-torch>=2.24; sys_platform != 'darwin' or platform_machine != 'arm64'",
+    "kornia>=0.7; sys_platform != 'darwin' or platform_machine != 'arm64'",
+    "einops; sys_platform != 'darwin' or platform_machine != 'arm64'",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-timeout", "httpx"]
-mlx = ["mlx>=0.21", "huggingface_hub", "safetensors"]
+dev = ["pytest", "pytest-timeout", "httpx", "localvqgan[torch]"]
+torch = ["torch>=2.4", "torchvision", "open-clip-torch>=2.24", "kornia>=0.7", "einops"]
+mlx = ["mlx>=0.21"]
 
 [project.scripts]
 localvqgan = "localvqgan.server.main:run"

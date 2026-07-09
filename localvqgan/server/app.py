@@ -73,8 +73,11 @@ def create_app(manager: JobManager) -> FastAPI:
 
     @app.get("/api/checkpoints")
     def list_checkpoints():
+        # converted MLX weights count as downloaded: a slim install may never
+        # have (or need) the original torch ckpt
         return [{"name": s.name, "size_mb": s.size_mb,
-                 "downloaded": checkpoints.is_downloaded(s.name),
+                 "downloaded": (checkpoints.is_downloaded(s.name)
+                                or checkpoints.has_mlx_weights(s.name)),
                  "mirror_offline": s.mirror_offline}
                 for s in checkpoints.CHECKPOINTS.values()]
 
@@ -129,7 +132,8 @@ def create_app(manager: JobManager) -> FastAPI:
     def system():
         from localvqgan.pipeline import backends
         ram_gb = psutil.virtual_memory().total / 2**30
-        engines = ["torch"] + (["mlx"] if backends.mlx_available() else [])
+        engines = ((["torch"] if backends.torch_available() else [])
+                   + (["mlx"] if backends.mlx_available() else []))
         return {"device": manager.generator.device.type,
                 "total_ram_gb": round(ram_gb, 1),
                 "max_recommended_side": _max_side(ram_gb),
@@ -162,5 +166,5 @@ def create_app(manager: JobManager) -> FastAPI:
 
 def _preview_app() -> FastAPI:
     # uvicorn --factory entry for dev preview; mirrors main.run() wiring
-    from localvqgan.pipeline.generator import Generator
-    return create_app(JobManager(Generator, Path.cwd() / "outputs"))
+    from localvqgan.server.main import default_manager
+    return create_app(default_manager(Path.cwd() / "outputs"))

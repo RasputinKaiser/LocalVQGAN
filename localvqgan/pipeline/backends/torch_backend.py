@@ -1,5 +1,5 @@
 import threading
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 from typing import Iterator
 
@@ -13,6 +13,7 @@ from localvqgan.pipeline import checkpoints
 from localvqgan.pipeline.clip_guide import ClipGuide, Prompt, clamp_with_grad, vector_quantize
 from localvqgan.pipeline.cutouts import MakeCutouts
 from localvqgan.pipeline.device import pick_device
+from localvqgan.pipeline.frames import FrameUpdate, GenerationOOM  # noqa: F401 — re-exported
 from localvqgan.pipeline.prompts import parse_prompts
 from localvqgan.pipeline.settings import GenerationSettings
 from localvqgan.pipeline.vqgan import VQGANWrapper, load_vqgan
@@ -30,18 +31,6 @@ TORCH_DECODE_CHECKPOINT_MIN_PIXELS = 384 * 384
 # it changes the exact pixels for a given seed.
 FAST_COARSE_FRACTION = 0.6
 FAST_MIN_COARSE_TOKENS = 8
-
-
-@dataclass
-class FrameUpdate:
-    iteration: int
-    total: int
-    image: Image.Image | None
-    loss: float | None
-
-
-class GenerationOOM(RuntimeError):
-    pass
 
 
 class _NonFiniteLoss(RuntimeError):

@@ -91,6 +91,23 @@ def is_downloaded(name: str) -> bool:
     return cfg.exists() and ckpt.exists() and ckpt.stat().st_size > 0
 
 
+def has_mlx_weights(name: str) -> bool:
+    # Converted weights are all the MLX engine needs — the torch ckpt may
+    # never have been downloaded on a slim install.
+    return (cache_dir() / name / "mlx" / "vqgan.safetensors").exists()
+
+
+def ensure_config(name: str) -> Path:
+    # The config yaml is tiny; fetch it alone so an MLX load from converted
+    # weights never forces the multi-GB torch ckpt download.
+    spec = CHECKPOINTS[name]
+    cfg, _ = checkpoint_paths(name)
+    if not cfg.exists():
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        _stream_to_file(spec.config_url, cfg, lambda d, t: None)
+    return cfg
+
+
 def _stream_to_file(url: str, dest: Path, cb: Callable[[int, int], None]) -> None:
     part = dest.with_suffix(dest.suffix + ".part")
     done = part.stat().st_size if part.exists() else 0
@@ -114,9 +131,7 @@ def _stream_to_file(url: str, dest: Path, cb: Callable[[int, int], None]) -> Non
 
 def download(name: str, progress_cb: Callable[[str, int, int], None]) -> None:
     spec = CHECKPOINTS[name]
-    cfg, ckpt = checkpoint_paths(name)
-    cfg.parent.mkdir(parents=True, exist_ok=True)
-    if not cfg.exists():
-        _stream_to_file(spec.config_url, cfg, lambda d, t: None)
+    _, ckpt = checkpoint_paths(name)
+    ensure_config(name)
     if not (ckpt.exists() and ckpt.stat().st_size > 0):
         _stream_to_file(spec.ckpt_url, ckpt, lambda d, t: progress_cb(name, d, t))

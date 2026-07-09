@@ -28,7 +28,7 @@ from localvqgan.pipeline.backends.mlx_backend.vqgan import (
     MlxVQGAN,
     load_mlx_vqgan_from_arrays,
 )
-from localvqgan.pipeline.backends.torch_backend import FrameUpdate, GenerationOOM
+from localvqgan.pipeline.frames import FrameUpdate, GenerationOOM
 from localvqgan.pipeline.prompts import parse_prompts
 from localvqgan.pipeline.settings import GenerationSettings
 
@@ -200,7 +200,7 @@ class MlxGenerator:
         if self._loaded == (checkpoint, clip_model):
             return
         weights_path = convert.cached_vqgan_weights(checkpoint)
-        cfg, _ = checkpoints.checkpoint_paths(checkpoint)
+        cfg = checkpoints.ensure_config(checkpoint)
         weights = dict(mx.load(str(weights_path)).items())
         # The VQGAN decoder's ResNet/Upsample chain overflows fp16's ~65504 max
         # value at 256-degree resolution as generation progresses (measured:

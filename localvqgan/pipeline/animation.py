@@ -1,12 +1,16 @@
+from __future__ import annotations
+
 import threading
 from dataclasses import dataclass
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from PIL import Image
 
-from localvqgan.pipeline.generator import Generator
 from localvqgan.pipeline.outputs import RunWriter
 from localvqgan.pipeline.settings import GenerationSettings
+
+if TYPE_CHECKING:  # type-only: keeps the slim (torch-free) install importable
+    from localvqgan.pipeline.generator import Generator
 
 
 @dataclass

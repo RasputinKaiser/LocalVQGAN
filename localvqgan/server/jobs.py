@@ -9,7 +9,7 @@ from typing import Callable
 
 from localvqgan.pipeline.animation import Keyframe, render_animation
 from localvqgan.pipeline.backends import resolve_engine
-from localvqgan.pipeline.generator import GenerationOOM, Generator
+from localvqgan.pipeline.frames import GenerationOOM
 from localvqgan.pipeline.outputs import RunWriter
 from localvqgan.pipeline.settings import GenerationSettings
 
@@ -27,9 +27,11 @@ def generation_settings_from_dict(settings_dict: dict) -> GenerationSettings:
 
 
 class JobManager:
-    def __init__(self, generator_factory: Callable[[], Generator], outputs_root: Path):
+    def __init__(self, generator_factory: Callable[[], object], outputs_root: Path,
+                 default_engine: str = "torch"):
         self._factory = generator_factory
-        self._generator: Generator | None = None
+        self._generator: object | None = None
+        self.default_engine = default_engine
         self.outputs_root = Path(outputs_root)
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
@@ -43,18 +45,19 @@ class JobManager:
         self._loop = loop
 
     @property
-    def generator(self) -> Generator:
+    def generator(self):
         if self._generator is None:
             self._generator = self._factory()
         return self._generator
 
     def _generator_for(self, engine_name: str):
-        if engine_name == "torch":
-            return self.generator  # existing warm torch generator
-        if getattr(self, "_mlx_generator", None) is None:
+        if engine_name == self.default_engine:
+            return self.generator  # existing warm default-engine generator
+        attr = f"_{engine_name}_generator"
+        if getattr(self, attr, None) is None:
             from localvqgan.pipeline.backends import make_generator
-            self._mlx_generator = make_generator("mlx")
-        return self._mlx_generator
+            setattr(self, attr, make_generator(engine_name))
+        return getattr(self, attr)
 
     def status(self) -> dict:
         return dict(self._state)
