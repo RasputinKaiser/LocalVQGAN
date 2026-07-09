@@ -18,7 +18,6 @@ from localvqgan.pipeline.backends.mlx_backend.cutouts import (
 from localvqgan.pipeline.backends.mlx_backend.losses import (
     clamp_with_grad,
     prompt_loss,
-    replace_grad,
     vector_quantize,
 )
 from localvqgan.pipeline.clip_guide import Prompt

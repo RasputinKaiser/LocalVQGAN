@@ -83,7 +83,6 @@ def test_fast_mode_large_fine_stage_uses_chunked_path(monkeypatch):
 
 def test_adam_matches_torch_bias_correction():
     import mlx.core as mx
-    import mlx.optimizers as mo
     import numpy as np
     import torch
     from localvqgan.pipeline.backends.mlx_backend.generator import _adam_update, make_adam
@@ -95,7 +94,9 @@ def test_adam_matches_torch_bias_correction():
     t = torch.tensor(x0, requires_grad=True)
     topt = torch.optim.Adam([t], lr=0.1)
     for g in grads:
-        topt.zero_grad(); t.grad = torch.tensor(g); topt.step()
+        topt.zero_grad()
+        t.grad = torch.tensor(g)
+        topt.step()
 
     m = {"z": mx.array(x0)}
     mopt = make_adam(0.1)

@@ -47,7 +47,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-timeout", "httpx", "localvqgan[torch]"]
+dev = ["pytest", "pytest-timeout", "httpx", "ruff", "localvqgan[torch]"]
 torch = ["torch>=2.4", "torchvision", "open-clip-torch>=2.24", "kornia>=0.7", "einops"]
 mlx = ["mlx>=0.21"]
 
@@ -63,6 +63,14 @@ Changelog = "https://github.com/RasputinKaiser/LocalVQGAN/blob/main/CHANGELOG.md
 [build-system]
 requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+# vendored taming-transformers code stays a faithful port — don't lint it
+extend-exclude = ["localvqgan/pipeline/vendor"]
+
+[tool.ruff.lint]
+# style-only rules that would churn fidelity-critical engine code
+ignore = ["E731", "E741"]
 
 [tool.setuptools.packages.find]
 include = ["localvqgan*"]

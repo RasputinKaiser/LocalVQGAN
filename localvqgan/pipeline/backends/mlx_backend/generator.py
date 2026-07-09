@@ -280,7 +280,7 @@ class MlxGenerator:
             return value_and_grad
         try:
             compiled = mx.compile(value_and_grad)
-        except Exception as exc:
+        except Exception:
             logger.warning(
                 "MLX compile unavailable; falling back to eager generation",
                 exc_info=True,
@@ -299,7 +299,7 @@ class MlxGenerator:
                     self.compile_engaged = True
                     first_call = False
                     return out
-                except Exception as exc:
+                except Exception:
                     logger.warning(
                         "MLX compiled generation step failed; falling back to eager",
                         exc_info=True,

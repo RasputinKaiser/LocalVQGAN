@@ -8,7 +8,7 @@ pytest.importorskip("mlx")
 import mlx.core as mx
 
 from localvqgan.pipeline.backends.mlx_backend.convert import torch_vqgan_to_mlx_weights
-from localvqgan.pipeline.backends.mlx_backend.vqgan import MlxVQGAN, load_mlx_vqgan_from_arrays
+from localvqgan.pipeline.backends.mlx_backend.vqgan import load_mlx_vqgan_from_arrays
 from localvqgan.pipeline.vqgan import load_vqgan
 
 FIXTURE = Path(__file__).parent / "fixtures" / "tiny_vqgan.yaml"
