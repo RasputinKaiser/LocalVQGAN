@@ -55,11 +55,13 @@ def create_app(manager: JobManager) -> FastAPI:
                     settings.setdefault("image_prompts", []).append(str(p))
                 else:
                     settings[target] = str(p)
+            queue = bool(body.get("queue"))
             if body.get("type") == "animation":
                 run_id = manager.start_animation(settings,
-                                                 body.get("keyframes", []))
+                                                 body.get("keyframes", []),
+                                                 queue=queue)
             else:
-                run_id = manager.start_still(settings)
+                run_id = manager.start_still(settings, queue=queue)
         except Busy:
             raise HTTPException(409, "A job is already running")
         except (TypeError, ValueError) as e:

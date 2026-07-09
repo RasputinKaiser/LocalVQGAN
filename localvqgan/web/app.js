@@ -100,12 +100,14 @@ function settingsFromForm() {
 }
 
 function setRunning(running) {
-  $("generate").classList.toggle("hidden", running);
+  // while a job runs, Generate stays available and queues the next job
+  $("generate").textContent = running ? "Queue next" : "Generate";
   $("stop").classList.toggle("hidden", !running);
 }
 
 async function startJob(body) {
   losses.length = 0;
+  body.queue = true; // server runs jobs one at a time; extra submits wait in line
   await api("/api/jobs", { method: "POST",
     headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   setRunning(true);
@@ -151,6 +153,9 @@ function drawSpark() {
 }
 
 function onMessage(msg) {
+  if (msg.queued !== undefined)
+    $("queued").textContent = msg.queued > 0 ? `· ${msg.queued} queued` : "";
+  if (msg.type === "queue") return;
   if (msg.type === "download") {
     const p = $("download-progress");
     p.classList.remove("hidden");
@@ -205,6 +210,8 @@ async function loadGallery() {
         <a href="/api/gallery/${r.run_id}/timelapse.mp4">MP4</a>
         <a href="/api/gallery/${r.run_id}/settings.json" target="_blank">JSON</a>
         <button data-run="${r.run_id}" class="reuse">Reuse</button>
+        <button data-run="${r.run_id}" class="upscale"
+          title="Re-render at double size, refining this image (the classic init-image upscale: keeps the composition, adds detail)">Upscale 2&times;</button>
       </div>`;
     card.querySelector(".reuse").onclick = async (ev) => {
       const s = await api(`/api/gallery/${ev.target.dataset.run}/settings.json`);
@@ -216,6 +223,29 @@ async function loadGallery() {
       if (s.fast_mode !== undefined) $("fast_mode").checked = s.fast_mode;
       checkSize();
       window.scrollTo({ top: 0, behavior: "smooth" });
+    };
+    card.querySelector(".upscale").onclick = async (ev) => {
+      try {
+        const runId = ev.target.dataset.run;
+        const s = await api(`/api/gallery/${runId}/settings.json`);
+        const w = (s.width || 256) * 2, h = (s.height || 256) * 2;
+        if (sysinfo && Math.max(w, h) > sysinfo.max_recommended_side) {
+          $("error").textContent =
+            `Upscale target ${w}×${h} is above this machine's recommended ${sysinfo.max_recommended_side}px.`;
+          return;
+        }
+        const blob = await (await fetch(`/api/gallery/${runId}/final.png`)).blob();
+        const dataUrl = await new Promise((res) => {
+          const rd = new FileReader(); rd.onload = () => res(rd.result); rd.readAsDataURL(blob);
+        });
+        const settings = { ...s, width: w, height: h, init_image: null,
+          // the fine-stage share of the budget: enough to add 2x detail
+          // without re-deciding the composition the draft already settled
+          iterations: Math.max(60, Math.round((s.iterations || 300) * 0.4)),
+          fast_mode: false };
+        delete settings.engine_used;
+        await startJob({ type: "still", settings, init_image_data: dataUrl });
+      } catch (e) { $("error").textContent = e.message; }
     };
     g.appendChild(card);
   }

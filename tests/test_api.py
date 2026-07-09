@@ -86,6 +86,43 @@ def test_busy_returns_409(tmp_path):
     _wait_idle(client)
 
 
+def test_queue_runs_jobs_in_order(tmp_path):
+    client, mgr = make_client(tmp_path)
+    r1 = client.post("/api/jobs", json={"type": "still", "queue": True,
+                                        "settings": {"prompts": "x", "iterations": 5}})
+    r2 = client.post("/api/jobs", json={"type": "still", "queue": True,
+                                        "settings": {"prompts": "y", "iterations": 5}})
+    assert r1.status_code == 200 and r2.status_code == 200
+    ids = [r1.json()["run_id"], r2.json()["run_id"]]
+    assert len(set(ids)) == 2
+    # both jobs complete; the queued one runs after the first
+    t0 = time.time()
+    while time.time() - t0 < 10:
+        st = client.get("/api/status").json()
+        if st["state"] == "done" and st["queued"] == 0 and st.get("run_id") == ids[1]:
+            break
+        time.sleep(0.05)
+    else:
+        raise TimeoutError(st)
+    for run_id in ids:
+        assert client.get(f"/api/gallery/{run_id}/final.png").status_code == 200
+
+
+def test_cancel_clears_queue(tmp_path):
+    client, _ = make_client(tmp_path)
+    client.post("/api/jobs", json={"type": "still", "queue": True,
+                                   "settings": {"prompts": "x", "iterations": 5}})
+    r2 = client.post("/api/jobs", json={"type": "still", "queue": True,
+                                        "settings": {"prompts": "y", "iterations": 5}})
+    queued_id = r2.json()["run_id"]
+    assert client.get("/api/status").json()["queued"] == 1
+    client.post("/api/jobs/cancel")
+    st = _wait_idle(client)
+    assert st["queued"] == 0
+    # the queued job never ran
+    assert client.get(f"/api/gallery/{queued_id}/final.png").status_code == 404
+
+
 def test_cancel(tmp_path):
     client, _ = make_client(tmp_path)
     client.post("/api/jobs", json={"type": "still",
