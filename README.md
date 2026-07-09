@@ -18,6 +18,10 @@ same hardware, with the same math and the same look.
 </p>
 <p align="center"><sub>Unretouched output at default settings (300 iterations, 32 cutouts, imagenet_16384). See <a href="PERFORMANCE.md">PERFORMANCE.md</a> for how fast.</sub></p>
 
+<p align="center">
+  <img src=".github/assets/app.png" width="760" alt="The LocalVQGAN web GUI: live preview of 'a lighthouse in a storm, oil painting' generating on the MLX engine, with the gallery below">
+</p>
+
 ## Quick start
 
 LocalVQGAN needs Python 3.11 or newer.
@@ -68,6 +72,9 @@ supported NVIDIA setups; if CUDA is not available, PyTorch falls back to CPU.
 - MPS-native augmentation set — no CPU-fallback ops in the hot loop.
 - Live preview streaming, gallery with reusable settings, timelapse MP4
   export, and keyframed zoom/pan animation mode.
+- Opt-in **Fast mode**: the same 300 iterations run coarse-to-fine
+  (~1.3x faster on Apple Silicon) with the look preserved in distribution —
+  off by default because it changes the exact per-seed pixels.
 - Every image gets a `settings.json` sidecar for exact reproduction.
 - On Apple Silicon, the native MLX engine is the default install — same
   checkpoints, same math, no PyTorch dependency; pick the engine in the GUI
@@ -139,3 +146,6 @@ by a half-precision NaN bug, fixed and re-measured; see `PERFORMANCE.md`.
 
     .venv/bin/pytest            # fast suite
     .venv/bin/pytest -m slow    # downloads models, runs real generation
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the ground rules (fidelity gates,
+performance-claim policy) and [CHANGELOG.md](CHANGELOG.md) for release notes.

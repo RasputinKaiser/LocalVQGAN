@@ -130,11 +130,13 @@ def create_app(manager: JobManager) -> FastAPI:
 
     @app.get("/api/system")
     def system():
+        import localvqgan
         from localvqgan.pipeline import backends
         ram_gb = psutil.virtual_memory().total / 2**30
         engines = ((["torch"] if backends.torch_available() else [])
                    + (["mlx"] if backends.mlx_available() else []))
         return {"device": manager.generator.device.type,
+                "version": localvqgan.__version__,
                 "total_ram_gb": round(ram_gb, 1),
                 "max_recommended_side": _max_side(ram_gb),
                 "engines": engines}

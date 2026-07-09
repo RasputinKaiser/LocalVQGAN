@@ -8,11 +8,67 @@ on:
 
 jobs:
   fast-suite:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest   # torch engine
+            python: "3.11"
+          - os: macos-14        # Apple Silicon: mlx engine + torch via [dev]
+            python: "3.12"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Cache converted CLIP weights (mlx fast tests convert once)
+        if: runner.os == 'macOS'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/localvqgan/clip
+            ~/.cache/huggingface
+          key: clip-weights-${{ runner.os }}-v1
+      - run: pip install -e ".[dev]"
+      - name: Pre-convert CLIP weights outside the per-test timeout
+        if: runner.os == 'macOS'
+        run: python -c "from localvqgan.pipeline.backends.mlx_backend.convert import cached_clip_weights; cached_clip_weights('ViT-B-32')"
+      - run: pytest -q --timeout 120
+
+  slim-install:
+    # The flagship Apple-Silicon install: no torch at all. Prove the packaging
+    # markers and the torch-free import/dispatch chain on a cold machine.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install .
+      - name: torch must not be installed on Apple Silicon by default
+        run: |
+          python - <<'EOF'
+          import importlib.util
+          assert importlib.util.find_spec("torch") is None, "slim install pulled torch!"
+          assert importlib.util.find_spec("mlx") is not None, "slim install missing mlx"
+          from pathlib import Path
+          from localvqgan.pipeline.backends import make_generator, resolve_engine
+          from localvqgan.server.app import create_app
+          from localvqgan.server.main import default_manager
+          assert resolve_engine("auto", "imagenet_16384", "ViT-B-32")[0] == "mlx"
+          assert make_generator("mlx").device.type == "mlx"
+          create_app(default_manager(Path("outputs")))
+          print("slim install OK")
+          EOF
+
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-      - run: pip install -e ".[dev]"
-      - run: pytest -q --timeout 120
+          python-version: "3.12"
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check dist/*

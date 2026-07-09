@@ -1,9 +1,29 @@
 [project]
 name = "localvqgan"
-version = "0.1.0"
-description = "Fast local VQGAN+CLIP with a web GUI"
+version = "0.2.0"
+description = "The classic 2021 VQGAN+CLIP aesthetic, rebuilt to run fast and locally with a web GUI"
+readme = "README.md"
 requires-python = ">=3.11"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "RasputinKaiser" }]
+keywords = ["vqgan", "clip", "vqgan-clip", "generative-art", "mlx", "pytorch",
+            "apple-silicon", "text-to-image"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Web Environment",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Multimedia :: Graphics",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
 dependencies = [
     "omegaconf",
     "numpy",
@@ -34,8 +54,14 @@ mlx = ["mlx>=0.21"]
 [project.scripts]
 localvqgan = "localvqgan.server.main:run"
 
+[project.urls]
+Homepage = "https://github.com/RasputinKaiser/LocalVQGAN"
+Repository = "https://github.com/RasputinKaiser/LocalVQGAN"
+Issues = "https://github.com/RasputinKaiser/LocalVQGAN/issues"
+Changelog = "https://github.com/RasputinKaiser/LocalVQGAN/blob/main/CHANGELOG.md"
+
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
