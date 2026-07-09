@@ -166,8 +166,13 @@ function onMessage(msg) {
     $("idle-hint").style.display = "none";
   }
   if (msg.loss !== undefined) { losses.push(msg.loss); drawSpark(); }
-  if (msg.iteration !== undefined)
-    $("progress-text").textContent = `${msg.phase || ""} ${msg.iteration}/${msg.total}` + (msg.engine ? ` · ${msg.engine}` : "");
+  if (msg.iteration !== undefined) {
+    // a finished/errored job keeps its last iteration fields in the status
+    // snapshot; don't let a reload present them as still "generating"
+    const phase = msg.state === "done" ? "done" :
+                  msg.state === "error" ? "failed" : (msg.phase || "");
+    $("progress-text").textContent = `${phase} ${msg.iteration}/${msg.total}` + (msg.engine ? ` · ${msg.engine}` : "");
+  }
   if (msg.its_per_sec !== undefined) $("speed").textContent = `${msg.its_per_sec} it/s`;
   if (msg.engine) $("speed").title = `engine: ${msg.engine} (${msg.engine_reason || ""})`;
   if (msg.engine) $("progress-text").dataset.engine = msg.engine;
