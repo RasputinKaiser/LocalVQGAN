@@ -565,10 +565,29 @@ ships **opt-in** (`fast_mode`, GUI "Fast mode"), never the default.
 
 Implemented as an additive `_generate_coarse_to_fine` path (MLX) that reuses the
 existing primitives; the pristine default path is byte-for-byte unchanged.
-Gated to small-canvas targets with an exact 2× coarse→fine token grid (≥8 coarse
-tokens/side). 512² (where the decode dominates far more and the coarse stage
-also dodges the swap wall — projected larger win) and the torch engine are the
-next increment.
+Gated to targets with an exact 2× coarse→fine token grid (≥8 coarse
+tokens/side).
+
+**512² (MLX, `b70ee2d`):** the same driver now spans the small/large-canvas
+split — the coarse 256² stage runs the pristine in-RAM fp32 path, then the
+fine 512² stage switches to the chunked bf16 + cache-bracket machinery at the
+stage boundary. The coarse 60% therefore also dodges the 512² swap wall.
+
+**torch engine (2026-07-09):** same recipe, additive `_generate_coarse_to_fine`
+on the torch backend (`F.interpolate` bilinear upsample at the latent
+boundary, per-stage decoder checkpointing so a 512² fine stage checkpoints
+while its 256² coarse stage doesn't). One torch-specific finding: the MPS
+fp16 decoder — fine from one-hot inits for 300+ iterations — **overflows to
+NaN on upsampled latents** (measured: same latent decodes finite in fp32, NaN
+in fp16; the same Inf-in-the-decoder-up-chain failure the MLX port hit). The
+driver detects the non-finite first fine iteration and redoes just the fine
+stage with an fp32 VQGAN (CLIP stays fp16, matching the MLX precision
+policy), keeping the finished coarse stage. Diagnostic-only measurement
+(30 its, 256², seed 123, swap above the 10GB threshold so non-canonical):
+pristine 52.5s vs fast 47.3s ≈ **1.11×** — a floor, since the short run
+absorbs the one wasted NaN forward and the fp32 fine stage. A torch bf16
+fine stage (fp32 range, like the MLX 512² stage) is the obvious follow-up if
+MPS bf16 measures well.
 
 ## Reproducing any number
 

@@ -23,7 +23,8 @@ class GenerationSettings:
     # then upsample the latent and finish at full res. ~1.3x faster at 256² and
     # more at 512² for the same iteration/cutout/step budget. Changes the exact
     # pixels (breaks historic seed reproducibility), so it's opt-in, never the
-    # default. MLX engine only for now (torch runs the pristine path).
+    # default. Both engines honor it (MLX measured 1.30x at 256²; torch
+    # measured smaller — its fine stage falls back to an fp32 VQGAN on MPS).
     fast_mode: bool = False
 
     def to_dict(self) -> dict:
