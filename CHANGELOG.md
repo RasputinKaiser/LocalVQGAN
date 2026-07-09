@@ -3,6 +3,24 @@
 Notable changes to LocalVQGAN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Job queue**: submits while a job runs wait in line (`queue: true` on
+  `POST /api/jobs`; the web UI always opts in — Generate becomes "Queue
+  next"). Stop cancels the current job and clears the queue.
+- **Upscale 2×** on every gallery card: re-render at double size using that
+  image as the init (the classic draft→final upscale; keeps composition,
+  adds detail) with a fine-stage-sized iteration budget.
+- **Batch** control: queue up to 16 runs of the same settings — explicit
+  seeds step by one, random stays random.
+- `seed_used` in the sidecar: random-seed runs record the seed the engine
+  actually drew, and Reuse feeds it back for an exact replay.
+- Delete button on gallery cards (`DELETE /api/gallery/{run_id}`).
+- CLI flags: `--port`, `--outputs`, `--no-browser`; the server also falls
+  forward to the next free port instead of crashing when one is taken.
+- Ruff linting (config in pyproject) and a CI lint job.
+
 ## [0.2.0] - 2026-07-09
 
 First release prepared for PyPI.

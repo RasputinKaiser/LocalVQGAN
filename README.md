@@ -72,10 +72,15 @@ supported NVIDIA setups; if CUDA is not available, PyTorch falls back to CPU.
 - MPS-native augmentation set — no CPU-fallback ops in the hot loop.
 - Live preview streaming, gallery with reusable settings, timelapse MP4
   export, and keyframed zoom/pan animation mode.
+- A job queue with a batch control: queue a handful of draft seeds, walk
+  away, then one-click **Upscale 2×** the keeper — re-rendered at double
+  size from the draft as init image (the classic 2021 upscale idiom).
 - Opt-in **Fast mode**: the same 300 iterations run coarse-to-fine
   (~1.3x faster on Apple Silicon) with the look preserved in distribution —
   off by default because it changes the exact per-seed pixels.
-- Every image gets a `settings.json` sidecar for exact reproduction.
+- Every image gets a `settings.json` sidecar for exact reproduction —
+  including the seed actually drawn on random-seed runs (`seed_used`), so
+  Reuse replays exactly what you got.
 - On Apple Silicon, the native MLX engine is the default install — same
   checkpoints, same math, no PyTorch dependency; pick the engine in the GUI
   (auto/mlx/torch — torch appears once `pip install -e ".[torch]"` adds it).

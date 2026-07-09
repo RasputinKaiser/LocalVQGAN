@@ -60,6 +60,12 @@
           </label>
         </div>
         <div class="row">
+          <label>Batch
+            <input id="batch" type="number" value="1" min="1" max="16">
+            <span class="hint">queue this many runs at once — different seeds, same everything else</span>
+          </label>
+        </div>
+        <div class="row">
           <label>CLIP
             <select id="clip_model">
               <option>ViT-B-32</option><option>ViT-B-16</option>

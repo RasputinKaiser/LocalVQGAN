@@ -15,6 +15,7 @@ class FakeGenerator:
         pass
 
     def generate(self, settings, cancel=None):
+        self.last_seed = 4242  # like the real engines: resolved seed recorded
         for i in range(1, 6):
             if cancel is not None and cancel.is_set():
                 return
@@ -259,3 +260,25 @@ def test_engine_recorded_in_sidecar(tmp_path):
     _wait_idle(client)
     s = client.get(f"/api/gallery/{run_id}/settings.json").json()
     assert s["engine_used"] == "torch"
+
+
+def test_resolved_seed_recorded_in_sidecar(tmp_path):
+    client, _ = make_client(tmp_path)
+    r = client.post("/api/jobs", json={"type": "still",
+        "settings": {"prompts": "x", "iterations": 5, "seed": -1}})
+    run_id = r.json()["run_id"]
+    _wait_idle(client)
+    s = client.get(f"/api/gallery/{run_id}/settings.json").json()
+    assert s["seed"] == -1 and s["seed_used"] == 4242
+
+
+def test_delete_run(tmp_path):
+    client, _ = make_client(tmp_path)
+    r = client.post("/api/jobs", json={"type": "still",
+                                       "settings": {"prompts": "x", "iterations": 5}})
+    run_id = r.json()["run_id"]
+    _wait_idle(client)
+    assert client.delete(f"/api/gallery/{run_id}").status_code == 200
+    assert client.get(f"/api/gallery/{run_id}/final.png").status_code == 404
+    assert client.delete(f"/api/gallery/{run_id}").status_code == 404
+    assert client.delete("/api/gallery/no-such-run").status_code == 404

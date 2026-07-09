@@ -104,6 +104,19 @@ def create_app(manager: JobManager) -> FastAPI:
     def gallery():
         return list_runs(manager.outputs_root)
 
+    @app.delete("/api/gallery/{run_id}")
+    def delete_run(run_id: str):
+        st = manager.status()
+        if st.get("state") == "running" and st.get("run_id") == run_id:
+            raise HTTPException(409, "That run is currently generating")
+        d = (manager.outputs_root / run_id).resolve()
+        # only immediate children of outputs may be deleted (no traversal)
+        if d.parent != manager.outputs_root.resolve() or not d.is_dir():
+            raise HTTPException(404)
+        import shutil
+        shutil.rmtree(d)
+        return {"ok": True}
+
     @app.get("/api/gallery/{run_id}/final.png")
     def final_png(run_id: str):
         p = manager.outputs_root / run_id / "final.png"
