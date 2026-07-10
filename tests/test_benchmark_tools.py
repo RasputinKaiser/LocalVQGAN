@@ -3,7 +3,9 @@ import os
 import numpy as np
 import pytest
 
-from tools import mlx_512_benchmark as bench
+pytest.importorskip("mlx")  # the benchmark tool imports the MLX engine at module level
+
+from tools import mlx_512_benchmark as bench  # noqa: E402
 
 
 def test_patched_env_restores_values(monkeypatch):

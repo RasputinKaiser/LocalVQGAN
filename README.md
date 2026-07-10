@@ -18,6 +18,10 @@ same hardware, with the same math and the same look.
 </p>
 <p align="center"><sub>Unretouched output at default settings (300 iterations, 32 cutouts, imagenet_16384). See <a href="PERFORMANCE.md">PERFORMANCE.md</a> for how fast.</sub></p>
 
+<p align="center">
+  <img src=".github/assets/app.png" width="760" alt="The LocalVQGAN web GUI: live preview of 'a lighthouse in a storm, oil painting' generating on the MLX engine, with the gallery below">
+</p>
+
 ## Quick start
 
 LocalVQGAN needs Python 3.11 or newer.
@@ -33,11 +37,13 @@ Windows, from a local clone:
 Either command finds a suitable Python on your machine, creates a
 project-local `.venv`, installs LocalVQGAN into it, starts the web app at
 http://127.0.0.1:8420, and opens a browser tab — one command, nothing to
-configure first. On Apple Silicon it also installs the native MLX engine
-automatically, no extra step needed. If no Python 3.11+ is found, the script
-stops with a direct link to install one instead of failing with a confusing
-error. Re-running either script later just launches the app — the slow
-dependency install only happens once.
+configure first. On Apple Silicon the install is slim: it gets the native
+MLX engine and skips the ~2 GB PyTorch stack entirely (the historic torch
+checkpoints are read with a numpy-only loader, converted once, and cached).
+Everywhere else the PyTorch engine installs as before. If no Python 3.11+ is
+found, the script stops with a direct link to install one instead of failing
+with a confusing error. Re-running either script later just launches the
+app — the dependency install only happens once.
 
 Alternative one-command installs from a local clone, if you already use these
 tools:
@@ -66,10 +72,18 @@ supported NVIDIA setups; if CUDA is not available, PyTorch falls back to CPU.
 - MPS-native augmentation set — no CPU-fallback ops in the hot loop.
 - Live preview streaming, gallery with reusable settings, timelapse MP4
   export, and keyframed zoom/pan animation mode.
-- Every image gets a `settings.json` sidecar for exact reproduction.
-- On Apple Silicon, an optional MLX engine runs the same checkpoints
-  natively (`./run.sh` installs it automatically; elsewhere it's
-  `pip install -e ".[mlx]"`); pick the engine in the GUI (auto/mlx/torch).
+- A job queue with a batch control: queue a handful of draft seeds, walk
+  away, then one-click **Upscale 2×** the keeper — re-rendered at double
+  size from the draft as init image (the classic 2021 upscale idiom).
+- Opt-in **Fast mode**: the same 300 iterations run coarse-to-fine
+  (~1.3x faster on Apple Silicon) with the look preserved in distribution —
+  off by default because it changes the exact per-seed pixels.
+- Every image gets a `settings.json` sidecar for exact reproduction —
+  including the seed actually drawn on random-seed runs (`seed_used`), so
+  Reuse replays exactly what you got.
+- On Apple Silicon, the native MLX engine is the default install — same
+  checkpoints, same math, no PyTorch dependency; pick the engine in the GUI
+  (auto/mlx/torch — torch appears once `pip install -e ".[torch]"` adds it).
 
 ## Credits
 
@@ -98,10 +112,11 @@ have the files, drop `config.yaml` + `model.ckpt` into
 
 Two generation backends share the same checkpoints and math:
 
-- **torch** — MPS/CUDA/CPU via PyTorch. Always available.
-- **mlx** — Apple Silicon only, native Metal via MLX. Optional; `./run.sh`
-  installs it automatically on Apple Silicon, elsewhere it's
-  `pip install -e ".[mlx]"`. Not all checkpoints are supported yet (see
+- **torch** — MPS/CUDA/CPU via PyTorch. The default install everywhere
+  except Apple Silicon; there it's the `pip install -e ".[torch]"` extra
+  (needed for Gumbel checkpoints, which MLX doesn't support).
+- **mlx** — Apple Silicon only, native Metal via MLX; the default (and
+  torch-free) install there. Not all checkpoints are supported yet (see
   the capability map in `localvqgan/pipeline/backends/mlx_backend/`).
 
 Pick `torch`, `mlx`, or `auto` per generation in the GUI/API. `auto` prefers
@@ -136,3 +151,6 @@ by a half-precision NaN bug, fixed and re-measured; see `PERFORMANCE.md`.
 
     .venv/bin/pytest            # fast suite
     .venv/bin/pytest -m slow    # downloads models, runs real generation
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the ground rules (fidelity gates,
+performance-claim policy) and [CHANGELOG.md](CHANGELOG.md) for release notes.

@@ -1,35 +1,76 @@
 [project]
 name = "localvqgan"
-version = "0.1.0"
-description = "Fast local VQGAN+CLIP with a web GUI"
+version = "0.2.0"
+description = "The classic 2021 VQGAN+CLIP aesthetic, rebuilt to run fast and locally with a web GUI"
+readme = "README.md"
 requires-python = ">=3.11"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "RasputinKaiser" }]
+keywords = ["vqgan", "clip", "vqgan-clip", "generative-art", "mlx", "pytorch",
+            "apple-silicon", "text-to-image"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Web Environment",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Multimedia :: Graphics",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
 dependencies = [
-    "torch>=2.4",
-    "torchvision",
-    "open-clip-torch>=2.24",
-    "kornia>=0.7",
-    "einops",
     "omegaconf",
     "numpy",
     "pillow",
+    "regex",
     "fastapi",
     "uvicorn[standard]",
     "imageio[ffmpeg]",
     "requests",
     "psutil",
+    "huggingface_hub",
+    # Engines: Apple Silicon defaults to the slim MLX install (no ~2GB torch
+    # stack); every other platform defaults to torch. `localvqgan[torch]` adds
+    # torch on Apple Silicon too (needed once to convert non-prebuilt weights).
+    "mlx>=0.21; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "torch>=2.4; sys_platform != 'darwin' or platform_machine != 'arm64'",
+    "torchvision; sys_platform != 'darwin' or platform_machine != 'arm64'",
+    "open-clip-torch>=2.24; sys_platform != 'darwin' or platform_machine != 'arm64'",
+    "kornia>=0.7; sys_platform != 'darwin' or platform_machine != 'arm64'",
+    "einops; sys_platform != 'darwin' or platform_machine != 'arm64'",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-timeout", "httpx"]
-mlx = ["mlx>=0.21", "huggingface_hub", "safetensors"]
+dev = ["pytest", "pytest-timeout", "httpx", "ruff", "localvqgan[torch]"]
+torch = ["torch>=2.4", "torchvision", "open-clip-torch>=2.24", "kornia>=0.7", "einops"]
+mlx = ["mlx>=0.21"]
 
 [project.scripts]
 localvqgan = "localvqgan.server.main:run"
 
+[project.urls]
+Homepage = "https://github.com/RasputinKaiser/LocalVQGAN"
+Repository = "https://github.com/RasputinKaiser/LocalVQGAN"
+Issues = "https://github.com/RasputinKaiser/LocalVQGAN/issues"
+Changelog = "https://github.com/RasputinKaiser/LocalVQGAN/blob/main/CHANGELOG.md"
+
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+# vendored taming-transformers code stays a faithful port — don't lint it
+extend-exclude = ["localvqgan/pipeline/vendor"]
+
+[tool.ruff.lint]
+# style-only rules that would churn fidelity-critical engine code
+ignore = ["E731", "E741"]
 
 [tool.setuptools.packages.find]
 include = ["localvqgan*"]

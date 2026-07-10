@@ -3,13 +3,14 @@ import io
 import math
 import threading
 import time
+from collections import deque
 from dataclasses import fields
 from pathlib import Path
 from typing import Callable
 
 from localvqgan.pipeline.animation import Keyframe, render_animation
 from localvqgan.pipeline.backends import resolve_engine
-from localvqgan.pipeline.generator import GenerationOOM, Generator
+from localvqgan.pipeline.frames import GenerationOOM
 from localvqgan.pipeline.outputs import RunWriter
 from localvqgan.pipeline.settings import GenerationSettings
 
@@ -27,13 +28,16 @@ def generation_settings_from_dict(settings_dict: dict) -> GenerationSettings:
 
 
 class JobManager:
-    def __init__(self, generator_factory: Callable[[], Generator], outputs_root: Path):
+    def __init__(self, generator_factory: Callable[[], object], outputs_root: Path,
+                 default_engine: str = "torch"):
         self._factory = generator_factory
-        self._generator: Generator | None = None
+        self._generator: object | None = None
+        self.default_engine = default_engine
         self.outputs_root = Path(outputs_root)
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._cancel = threading.Event()
+        self._pending: deque = deque()
         self._subs: set[asyncio.Queue] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
         self.latest_preview: bytes | None = None
@@ -43,21 +47,22 @@ class JobManager:
         self._loop = loop
 
     @property
-    def generator(self) -> Generator:
+    def generator(self):
         if self._generator is None:
             self._generator = self._factory()
         return self._generator
 
     def _generator_for(self, engine_name: str):
-        if engine_name == "torch":
-            return self.generator  # existing warm torch generator
-        if getattr(self, "_mlx_generator", None) is None:
+        if engine_name == self.default_engine:
+            return self.generator  # existing warm default-engine generator
+        attr = f"_{engine_name}_generator"
+        if getattr(self, attr, None) is None:
             from localvqgan.pipeline.backends import make_generator
-            self._mlx_generator = make_generator("mlx")
-        return self._mlx_generator
+            setattr(self, attr, make_generator(engine_name))
+        return getattr(self, attr)
 
     def status(self) -> dict:
-        return dict(self._state)
+        return {**self._state, "queued": len(self._pending)}
 
     def subscribe(self) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=16)
@@ -68,7 +73,7 @@ class JobManager:
         self._subs.discard(q)
 
     def _publish(self, msg: dict) -> None:
-        if msg.get("type") != "download":
+        if msg.get("type") not in ("download", "queue"):
             self._state = {**self._state,
                            **{k: v for k, v in msg.items() if k != "image_jpeg"}}
         if self._loop is None:
@@ -85,32 +90,63 @@ class JobManager:
 
         self._loop.call_soon_threadsafe(push)
 
-    def _begin(self) -> None:
+    def _spawn_locked(self, kind: str, settings: GenerationSettings,
+                      writer: RunWriter, kfs: list | None) -> None:
+        self._cancel = threading.Event()
+        if kind == "still":
+            self._thread = threading.Thread(
+                target=self._run_still, args=(settings, writer), daemon=True)
+        else:
+            self._thread = threading.Thread(
+                target=self._run_animation, args=(settings, writer, kfs), daemon=True)
+        self._thread.start()
+
+    def _start_or_queue(self, kind: str, settings: GenerationSettings,
+                        writer: RunWriter, kfs: list | None, queue: bool) -> str:
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
-                raise Busy()
-            self._cancel = threading.Event()
-
-    def start_still(self, settings_dict: dict) -> str:
-        self._begin()
-        settings = generation_settings_from_dict(settings_dict)
-        writer = RunWriter(self.outputs_root, settings)
-        self._thread = threading.Thread(
-            target=self._run_still, args=(settings, writer), daemon=True)
-        self._thread.start()
+                if not queue:
+                    raise Busy()
+                self._pending.append((kind, settings, writer, kfs))
+                queued = len(self._pending)
+            else:
+                self._spawn_locked(kind, settings, writer, kfs)
+                queued = None
+        if queued is not None:
+            self._publish({"type": "queue", "queued": queued})
         return writer.run_id
 
-    def start_animation(self, settings_dict: dict, keyframes: list[dict]) -> str:
-        self._begin()
+    def _start_next(self) -> None:
+        with self._lock:
+            if not self._pending:
+                return
+            kind, settings, writer, kfs = self._pending.popleft()
+            self._spawn_locked(kind, settings, writer, kfs)
+            queued = len(self._pending)
+        self._publish({"type": "queue", "queued": queued})
+
+    @property
+    def queued(self) -> int:
+        return len(self._pending)
+
+    def start_still(self, settings_dict: dict, queue: bool = False) -> str:
+        settings = generation_settings_from_dict(settings_dict)
+        writer = RunWriter(self.outputs_root, settings)
+        return self._start_or_queue("still", settings, writer, None, queue)
+
+    def start_animation(self, settings_dict: dict, keyframes: list[dict],
+                        queue: bool = False) -> str:
         settings = generation_settings_from_dict(settings_dict)
         writer = RunWriter(self.outputs_root, settings)
         kfs = [Keyframe(**k) for k in keyframes]
-        self._thread = threading.Thread(
-            target=self._run_animation, args=(settings, writer, kfs), daemon=True)
-        self._thread.start()
-        return writer.run_id
+        return self._start_or_queue("animation", settings, writer, kfs, queue)
 
     def cancel(self) -> None:
+        # Stop means stop everything: drop what's waiting, then cancel the
+        # current job (skipping just the current run would surprise more).
+        with self._lock:
+            self._pending.clear()
+        self._publish({"type": "queue", "queued": 0})
         self._cancel.set()
 
     def _preview_jpeg(self, img) -> bytes:
@@ -147,12 +183,17 @@ class JobManager:
                 self._publish(msg)
             if last_img is not None:
                 writer.save_final(last_img)
-            writer.write_sidecar({"engine_used": engine_name})
+            # seed_used makes seed=-1 runs reproducible: the engine records
+            # the seed it actually drew, and Reuse feeds it back
+            writer.write_sidecar({"engine_used": engine_name,
+                                  "seed_used": getattr(gen, "last_seed", None)})
             self._publish({"state": "done", "run_id": writer.run_id})
         except GenerationOOM as e:
             self._publish({"state": "error", "error": str(e)})
         except Exception as e:  # surface, don't kill the server
             self._publish({"state": "error", "error": f"{type(e).__name__}: {e}"})
+        finally:
+            self._start_next()
 
     def _run_animation(self, settings: GenerationSettings, writer: RunWriter,
                        kfs: list) -> None:
@@ -183,3 +224,5 @@ class JobManager:
             self._publish({"state": "error", "error": str(e)})
         except Exception as e:
             self._publish({"state": "error", "error": f"{type(e).__name__}: {e}"})
+        finally:
+            self._start_next()

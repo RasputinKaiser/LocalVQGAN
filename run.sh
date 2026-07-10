@@ -23,14 +23,14 @@ if [ ! -x .venv/bin/python ]; then
   echo "Using $("$PYTHON" --version) at $(command -v "$PYTHON")"
   "$PYTHON" -m venv .venv
 
-  EXTRAS=""
   if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
-    EXTRAS="[mlx]"
-    echo "Apple Silicon detected — installing the native MLX engine alongside PyTorch."
+    echo "Apple Silicon detected — installing the slim native MLX engine (no PyTorch needed)."
+    echo "Installing LocalVQGAN and its dependencies..."
+  else
+    echo "Installing LocalVQGAN and its dependencies (downloads ~1-2 GB, mostly PyTorch — this can take a few minutes)..."
   fi
-  echo "Installing LocalVQGAN and its dependencies (downloads ~1-2 GB, mostly PyTorch — this can take a few minutes)..."
   .venv/bin/pip install --quiet --upgrade pip
-  .venv/bin/pip install -e ".$EXTRAS"
+  .venv/bin/pip install -e .
 fi
 
 exec .venv/bin/localvqgan

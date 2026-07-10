@@ -28,7 +28,7 @@ from localvqgan.pipeline.backends.mlx_backend.vqgan import (
     MlxVQGAN,
     load_mlx_vqgan_from_arrays,
 )
-from localvqgan.pipeline.backends.torch_backend import FrameUpdate, GenerationOOM
+from localvqgan.pipeline.frames import FrameUpdate, GenerationOOM
 from localvqgan.pipeline.prompts import parse_prompts
 from localvqgan.pipeline.settings import GenerationSettings
 
@@ -193,6 +193,7 @@ class MlxGenerator:
         self.vqgan: MlxVQGAN | None = None
         self.clip: MlxClip | None = None
         self._loaded: tuple[str, str] | None = None
+        self.last_seed: int | None = None
         self.device = type("MlxDevice", (), {"type": "mlx"})()
         self.compile_engaged = False
 
@@ -200,7 +201,7 @@ class MlxGenerator:
         if self._loaded == (checkpoint, clip_model):
             return
         weights_path = convert.cached_vqgan_weights(checkpoint)
-        cfg, _ = checkpoints.checkpoint_paths(checkpoint)
+        cfg = checkpoints.ensure_config(checkpoint)
         weights = dict(mx.load(str(weights_path)).items())
         # The VQGAN decoder's ResNet/Upsample chain overflows fp16's ~65504 max
         # value at 256-degree resolution as generation progresses (measured:
@@ -280,7 +281,7 @@ class MlxGenerator:
             return value_and_grad
         try:
             compiled = mx.compile(value_and_grad)
-        except Exception as exc:
+        except Exception:
             logger.warning(
                 "MLX compile unavailable; falling back to eager generation",
                 exc_info=True,
@@ -299,7 +300,7 @@ class MlxGenerator:
                     self.compile_engaged = True
                     first_call = False
                     return out
-                except Exception as exc:
+                except Exception:
                     logger.warning(
                         "MLX compiled generation step failed; falling back to eager",
                         exc_info=True,
@@ -599,6 +600,7 @@ class MlxGenerator:
     ):
         assert self.vqgan is not None and self.clip is not None
         seed = s.seed if s.seed >= 0 else int.from_bytes(os.urandom(4), "little") % (2**31)
+        self.last_seed = seed  # -1 requests resolve here; the sidecar records it
         codebook = self.vqgan.codebook
         z_min, z_max = codebook.min(axis=0), codebook.max(axis=0)
         coarse_w, coarse_h, n_coarse = self._fast_coarse_dims(s)
@@ -659,6 +661,7 @@ class MlxGenerator:
             yield from self._generate_coarse_to_fine(s, cancel)
             return
         seed = s.seed if s.seed >= 0 else int.from_bytes(os.urandom(4), "little") % (2**31)
+        self.last_seed = seed  # -1 requests resolve here; the sidecar records it
 
         codebook = self.vqgan.codebook
         z_min = codebook.min(axis=0)

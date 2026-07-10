@@ -55,11 +55,13 @@ def create_app(manager: JobManager) -> FastAPI:
                     settings.setdefault("image_prompts", []).append(str(p))
                 else:
                     settings[target] = str(p)
+            queue = bool(body.get("queue"))
             if body.get("type") == "animation":
                 run_id = manager.start_animation(settings,
-                                                 body.get("keyframes", []))
+                                                 body.get("keyframes", []),
+                                                 queue=queue)
             else:
-                run_id = manager.start_still(settings)
+                run_id = manager.start_still(settings, queue=queue)
         except Busy:
             raise HTTPException(409, "A job is already running")
         except (TypeError, ValueError) as e:
@@ -73,8 +75,11 @@ def create_app(manager: JobManager) -> FastAPI:
 
     @app.get("/api/checkpoints")
     def list_checkpoints():
+        # converted MLX weights count as downloaded: a slim install may never
+        # have (or need) the original torch ckpt
         return [{"name": s.name, "size_mb": s.size_mb,
-                 "downloaded": checkpoints.is_downloaded(s.name),
+                 "downloaded": (checkpoints.is_downloaded(s.name)
+                                or checkpoints.has_mlx_weights(s.name)),
                  "mirror_offline": s.mirror_offline}
                 for s in checkpoints.CHECKPOINTS.values()]
 
@@ -98,6 +103,19 @@ def create_app(manager: JobManager) -> FastAPI:
     @app.get("/api/gallery")
     def gallery():
         return list_runs(manager.outputs_root)
+
+    @app.delete("/api/gallery/{run_id}")
+    def delete_run(run_id: str):
+        st = manager.status()
+        if st.get("state") == "running" and st.get("run_id") == run_id:
+            raise HTTPException(409, "That run is currently generating")
+        d = (manager.outputs_root / run_id).resolve()
+        # only immediate children of outputs may be deleted (no traversal)
+        if d.parent != manager.outputs_root.resolve() or not d.is_dir():
+            raise HTTPException(404)
+        import shutil
+        shutil.rmtree(d)
+        return {"ok": True}
 
     @app.get("/api/gallery/{run_id}/final.png")
     def final_png(run_id: str):
@@ -127,10 +145,13 @@ def create_app(manager: JobManager) -> FastAPI:
 
     @app.get("/api/system")
     def system():
+        import localvqgan
         from localvqgan.pipeline import backends
         ram_gb = psutil.virtual_memory().total / 2**30
-        engines = ["torch"] + (["mlx"] if backends.mlx_available() else [])
+        engines = ((["torch"] if backends.torch_available() else [])
+                   + (["mlx"] if backends.mlx_available() else []))
         return {"device": manager.generator.device.type,
+                "version": localvqgan.__version__,
                 "total_ram_gb": round(ram_gb, 1),
                 "max_recommended_side": _max_side(ram_gb),
                 "engines": engines}
@@ -162,5 +183,5 @@ def create_app(manager: JobManager) -> FastAPI:
 
 def _preview_app() -> FastAPI:
     # uvicorn --factory entry for dev preview; mirrors main.run() wiring
-    from localvqgan.pipeline.generator import Generator
-    return create_app(JobManager(Generator, Path.cwd() / "outputs"))
+    from localvqgan.server.main import default_manager
+    return create_app(default_manager(Path.cwd() / "outputs"))

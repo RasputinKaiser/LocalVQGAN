@@ -21,6 +21,13 @@ def mlx_available() -> bool:
             and importlib.util.find_spec("mlx") is not None)
 
 
+def torch_available() -> bool:
+    try:
+        return importlib.util.find_spec("torch") is not None
+    except (ImportError, ValueError):
+        return False
+
+
 def mlx_supports(checkpoint: str, clip_model: str) -> bool:
     if not mlx_available():
         return False
@@ -36,22 +43,33 @@ def mlx_supports(checkpoint: str, clip_model: str) -> bool:
 def resolve_engine(engine: str, checkpoint: str, clip_model: str,
                    width: int | None = None, height: int | None = None) -> tuple[str, str]:
     if engine == "torch":
+        if not torch_available():
+            raise RuntimeError("torch engine requested but torch is not installed "
+                               "(pip install 'localvqgan[torch]')")
         return "torch", "explicit"
     if engine == "mlx":
         if not mlx_available():
             raise RuntimeError("mlx engine requested but mlx is not installed "
-                               "(pip install -e '.[mlx]', Apple Silicon only)")
+                               "(pip install 'localvqgan[mlx]', Apple Silicon only)")
         if not mlx_supports(checkpoint, clip_model):
             raise RuntimeError(f"mlx engine does not support {checkpoint}/{clip_model}")
         return "mlx", "explicit"
     # auto
     if not mlx_available():
+        if not torch_available():
+            raise RuntimeError(
+                "no engine installed — pip install 'localvqgan[torch]' "
+                "(any platform) or 'localvqgan[mlx]' (Apple Silicon)")
         return "torch", "mlx not installed"
-    if not MLX_MEETS_SPEED_GATE:
-        return "torch", "mlx below speed gate on this build"
-    if not mlx_supports(checkpoint, clip_model):
-        return "torch", f"{checkpoint} unsupported on mlx"
-    return "mlx", "auto"
+    if MLX_MEETS_SPEED_GATE and mlx_supports(checkpoint, clip_model):
+        return "mlx", "auto"
+    reason = ("mlx below speed gate on this build" if not MLX_MEETS_SPEED_GATE
+              else f"{checkpoint} unsupported on mlx")
+    if not torch_available():
+        raise RuntimeError(
+            f"{reason}, and torch is not installed as a fallback "
+            "(pip install 'localvqgan[torch]')")
+    return "torch", reason
 
 
 def make_generator(engine_name: str, device=None):

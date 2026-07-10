@@ -34,7 +34,7 @@
       </select></label>
     </div>
     <label class="check"><input id="fast_mode" type="checkbox"> Fast mode
-      <span class="hint">coarse-to-fine: ~1.3&times; faster, same 300 iterations, slightly different look (Apple-Silicon engine)</span>
+      <span class="hint">coarse-to-fine: faster (~1.3&times; on Apple Silicon), same 300 iterations, slightly different look</span>
     </label>
     <details id="advanced">
       <summary>Advanced</summary>
@@ -57,6 +57,12 @@
           <label>Seed
             <input id="seed" type="number" value="-1">
             <span class="hint">reuse a number for repeatable starts (-1 = random)</span>
+          </label>
+        </div>
+        <div class="row">
+          <label>Batch
+            <input id="batch" type="number" value="1" min="1" max="16">
+            <span class="hint">queue this many runs at once — different seeds, same everything else</span>
           </label>
         </div>
         <div class="row">
@@ -103,6 +109,7 @@
     </div>
     <div class="statusbar">
       <span id="progress-text"></span>
+      <span id="queued"></span>
       <span id="speed"></span>
       <canvas id="loss-spark" width="160" height="28"></canvas>
       <span id="error" class="warn"></span>

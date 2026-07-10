@@ -9,3 +9,5 @@ outputs/
 .codex/
 AGENTS.md
 state.yaml
+build/
+dist/
